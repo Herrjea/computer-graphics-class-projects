@@ -170,7 +170,7 @@ function main() {
         var angle = chopperAngle * Math.PI / 180.0;
         // Update position based on orientation and speed
         chopperPosition.x += Math.sin( angle ) * chopperLinearSpeed;
-        chopperPosition.y -= Math.cos( -angle ) * chopperLinearSpeed;
+        chopperPosition.y -= Math.cos( angle ) * chopperLinearSpeed;
 
         // Update blades angle
         if ( accelerating ){

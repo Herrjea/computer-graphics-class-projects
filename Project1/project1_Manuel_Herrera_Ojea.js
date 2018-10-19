@@ -1,13 +1,5 @@
 // Project #1. Manuel Herrera Ojea
 
-/*
-
-Falta:
-
-    Shaders a archivos aparte
-    Textura para el triángulo
-
-*/
 
 // Vertex shader program
 var VSHADER_SOURCE =
@@ -27,13 +19,8 @@ var FSHADER_SOURCE =
     '}\n';
 
 
-// Rotation angle (degrees/second)
-var ANGLE_STEP = 45.0;
-
-
 // Controller keys
 var fwdAccKey = 'KeyX';
-var bwdAccKey = 'KeyZ';
 var rightTurnKey = 'ArrowRight';
 var leftTurnKey = 'ArrowLeft';
 
@@ -84,7 +71,6 @@ function main() {
 
     // Current chopper rotation angle
     var chopperAngle = 0.0;
-    var currentAngle = 0.0; //////////////////////////
 
     // Current chopper position
     var chopperPosition = {
@@ -92,19 +78,19 @@ function main() {
         'y' : 0.0
     };
 
-    // Chopper linear speed
+    // Chopper linear speed management
     var chopperLinearSpeed = 0;
     var chopperLinearAcceleration = 0.002;
     var chopperLinearFriction = 0.001;
     var chopperMaxLinearSpeed = 0.03;
 
-    // Chopper angular speed
+    // Chopper angular speed management
     var chopperAngularSpeed = 0.0;
     var chopperAngularAcceleration = 0.8;
     var chopperAngularFriction = 0.6;
     var chopperMaxAngularSpeed = 7.0;
 
-    // Current blade rotation
+    // Blade rotation management
     var bladeAngle = 0.0;
     var bladeSpeed = 5.0;
     var bladeBaseSpeed = 5.0;
@@ -112,33 +98,29 @@ function main() {
     var bladeAcceleration = 5.0;
     var bladeFriction = 1.0;
 
-    var threshold = chopperLinearFriction;
-
     // Model matrix
     var modelMatrix = new Matrix4();
 
+    // State control variables
     var accelerating = false;
     var decelerating = false;
     var turningRight = false;
     var turningLeft = false;
 
 
-
+    // Change state depending on key presses
     document.addEventListener( 'keydown', function(e){
 
         if ( e.code == fwdAccKey )
             accelerating = true;
-        else if ( e.code == bwdAccKey )
-            decelerating = true;
         else if ( e.code == rightTurnKey )
             turningRight = true;
         else if ( e.code == leftTurnKey )
             turningLeft = true;
 
-        console.log( e.code + ' pressed.' );
-
     } );
 
+    // Change state depending on key releases
     document.addEventListener( 'keyup', function(e){
         if ( e.code == fwdAccKey )
             accelerating = false;
@@ -148,8 +130,6 @@ function main() {
             turningRight = false;
         else if ( e.code == leftTurnKey )
             turningLeft = false;
-
-        console.log( e.code + ' released.' );
     });
 
 
@@ -158,14 +138,12 @@ function main() {
     var tick = function() {
 
         // Update properties based on movement model
-        currentAngle = animate(currentAngle);
 
         // Update linear speed
         if ( accelerating && chopperLinearSpeed < chopperMaxLinearSpeed )
             chopperLinearSpeed += chopperLinearAcceleration;
         else if ( chopperLinearSpeed > 0 )
             chopperLinearSpeed -= chopperLinearFriction;
-        console.log( chopperLinearSpeed );
 
         // Update angular speed
         if ( turningRight ){
@@ -181,22 +159,18 @@ function main() {
         else
             chopperAngularSpeed = 0.0;
 
-        //chopperAngle = ( chopperAngle + chopperAngularSpeed ) % 360;
+        // Update orientation
         chopperAngle += chopperAngularSpeed;
-        console.log( '\t\t\tAngular speed: ' + chopperAngularSpeed );
-        console.log( 'Moving to ' + ( chopperAngle % 360 ) + ' degrees' );
 
+        // Clip to zero to prevent shivering because of float precision errors
         if ( ! accelerating && chopperLinearSpeed < chopperLinearAcceleration )
             chopperLinearSpeed = 0.0;
-        //else if ( chopperLinearSpeed <= threshold && chopperLinearSpeed >= (-threshold) )
-        //    chopperLinearSpeed = 0.0;
 
         // Convert to radians for Math libraries
         var angle = chopperAngle * Math.PI / 180.0;
-        console.log( '\t\t\t\t' + angle );
+        // Update position based on orientation and speed
         chopperPosition.x += Math.sin( angle ) * chopperLinearSpeed;
         chopperPosition.y -= Math.cos( -angle ) * chopperLinearSpeed;
-        console.log(chopperPosition);
 
         // Update blades angle
         if ( accelerating ){
@@ -229,7 +203,8 @@ function initVertexBuffers(gl) {
         -0.1, 0.005,     -0.1, -0.005,    0.1, 0.005,  // blades
         -0.1, -0.005,    0.1, -0.005,     0.1, 0.005   // blades
     ]);
-    var n = 9;
+    var attribSize = 2;
+    var vertCount = vertices.length / attribSize;
 
 
     // Create the buffer object
@@ -250,12 +225,12 @@ function initVertexBuffers(gl) {
         console.log('Failed to get the storage location of a_Position');
         return -1;
     }
-    gl.vertexAttribPointer(a_Position, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(a_Position, attribSize, gl.FLOAT, false, 0, 0);
 
     // Enable the assignment to a_Position variable
     gl.enableVertexAttribArray(a_Position);
 
-    return n;
+    return vertCount;
 }
 
 
@@ -265,12 +240,9 @@ function draw( gl, n, chopperAngle, bladeAngle, chopperPosition, speed,
     // Clear <canvas>
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    // Set the triangle rotation matrix
+    // Set the triangle transformation matrix
     modelMatrix.setTranslate( chopperPosition.x, chopperPosition.y, 0 );
-    //var angle = chopperAngle / Math.PI * 180.0;
     modelMatrix.rotate( chopperAngle, 0, 0, 1 );
-    console.log( 'Rotating ' + ( chopperAngle % 360 ) + ' degrees' );
-    //console.log( 'Rotating ' + ( ( chopperAngle * 180.0 / Math.PI ) % 360 ) + ' degrees' );
 
     // Pass the triangle rotation matrix to the vertex shader
     gl.uniformMatrix4fv(u_ModelMatrix, false, modelMatrix.elements);
@@ -288,27 +260,9 @@ function draw( gl, n, chopperAngle, bladeAngle, chopperPosition, speed,
     modelMatrix.setTranslate( chopperPosition.x, chopperPosition.y, 0 );
     modelMatrix.rotate( chopperAngle + bladeAngle, 0, 0, 1 );
     modelMatrix.scale( speed, (speed+1)/2, 1, 1 );
-    //modelMatrix.rotate( bladeAngle, 0, 0, 1 );
     gl.uniformMatrix4fv(u_ModelMatrix, false, modelMatrix.elements);
     gl.uniform4f( u_FragColor, (r+1)/2, (g+1)/2, (b+1)/2, 1 );
 
     // Draw the blades
     gl.drawArrays( gl.TRIANGLES, 3, 6 );
-}
-
-
-// Last time that this function was called
-var g_last = Date.now();
-
-function animate(angle) {
-
-  // Calculate the elapsed time
-  var now = Date.now();
-  var elapsed = now - g_last;
-  g_last = now;
-
-  // Update the current rotation angle (adjusted by the elapsed time)
-  var newAngle = angle + (ANGLE_STEP * elapsed) / 1000.0;
-
-  return newAngle %= 360;
 }

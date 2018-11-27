@@ -11,13 +11,16 @@ vertical sinusoidal offset =D
 var VSHADER_SOURCE =
     'attribute vec4 a_Position;\n' +
     'attribute vec4 a_Color;\n' +
+    'attribute vec2 a_TexCoord;\n' +
     'uniform mat4 u_mMatrix;\n' +
     'uniform mat4 u_vMatrix;\n' +
     'uniform mat4 u_pMatrix;\n' +
     'varying vec4 v_Color;\n' +
     'varying float v_Colored;\n' +
+    'varying vec2 v_TexCoord;\n' +
     'void main() {\n' +
     '  gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * a_Position;\n' +
+    '  v_TexCoord = a_TexCoord;\n' +
     '  v_Color = a_Color;\n' +
     '  if ( a_Position.y > 0.7 )\n' +
     '    v_Colored = 1.0;\n' +
@@ -32,12 +35,15 @@ var FSHADER_SOURCE =
     'precision mediump float;\n' +
     '#endif\n' +
     'uniform vec4 u_FragColor;\n' +
+    'uniform sampler2D u_Sampler;\n' +
     'varying vec4 v_Color;\n' +
     'varying float v_Colored;\n' +
+    'varying vec2 v_TexCoord;\n' +
     'float rate;\n' +
     'void main() {\n' +
     '  if ( u_FragColor.r == 0.0 )\n' +
-    '    gl_FragColor = v_Color;\n' +
+    '    gl_FragColor = texture2D(u_Sampler, v_TexCoord);\n' +
+//    '    gl_FragColor = v_Color;\n' +
     '  else {\n' +
     '    rate = (v_Colored + 1.0) / 2.0;\n' +
     '    if ( rate > 1.0 )\n' +
@@ -94,6 +100,12 @@ function main() {
     // Set the vertex information
     var buffersInfo = initVertexBuffers(gl);
 
+    // Set texture
+    if (!initTextures(gl)) {
+        console.log('Failed to intialize the texture.');
+        return;
+    }
+
     // Set the clear color and enable the depth test
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.enable(gl.DEPTH_TEST);
@@ -124,6 +136,13 @@ function main() {
     if (!u_FragColor) {
         console.log('Failed to get the storage location of u_FragColor');
         return;
+    }
+
+    // Get the storage location of a_TexCoord
+    var a_TexCoord = gl.getAttribLocation(gl.program, 'a_TexCoord');
+    if (a_TexCoord < 0) {
+      console.log('Failed to get the storage location of a_TexCoord');
+      return -1;
     }
 
 
@@ -313,7 +332,7 @@ function main() {
         draw(
             gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, 1+chopperHorizontalLinearSpeed*15,
             modelMatrix, viewMatrix, projectionMatrix,
-            u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor
+            u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord
         );
 
 
@@ -425,14 +444,33 @@ function initVertexBuffers(gl) {
     ]);
 
 
+    /// Texture coordinates for the floor ///
+
+    var floorTexCoords = new Float32Array([
+        0.0, 1.0,
+        0.0, 0.0,
+        1.0, 1.0,
+        1.0, 0.0,
+        0.5, 0.5,
+        0.0, 1.0,
+        0.0, 0.0,
+        1.0, 1.0,
+        1.0, 0.0,
+        0.5, 0.5
+    ]);
+
+
     /// Create the buffer objects ///
 
     body.indexBuffer = gl.createBuffer();
     blades.indexBuffer = gl.createBuffer();
     floor.indexBuffer = gl.createBuffer();
-    if ( !body.indexBuffer || !blades.indexBuffer || !floor.indexBuffer )
-        return -1;
+    var texCoordBuffer = gl.createBuffer();
 
+    if ( !body.indexBuffer || !blades.indexBuffer || !floor.indexBuffer || !texCoordBuffer ){
+        console.log('Failed to create a buffer object');
+        return -1;
+    }
 
     /*
         Different objects are stored in different buffers,
@@ -441,18 +479,23 @@ function initVertexBuffers(gl) {
         since JavaScript is doing the job, but I found
         no other way so far to use drawElements, this is,
         to use indices tables, to make several drawing calls.
+
+        But the texture coordinates buffer doesn't change
+        throughout the execution.
     */
 
-    /*// Write the vertex and color coordinates to the buffer objects
-    if (!initArrayBuffer(gl, vertices, 3, gl.FLOAT, 'a_Position'))
-        return -1;
+    gl.bindBuffer( gl.ARRAY_BUFFER, texCoordBuffer );
+    gl.bufferData( gl.ARRAY_BUFFER, floorTexCoords, gl.STATIC_DRAW );
 
-    if (!initArrayBuffer(gl, colors, 3, gl.FLOAT, 'a_Color'))
-        return -1;
-
-    // Write the indices to the buffer object
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);*/
+    // Get the storage location of a_TexCoord
+    var a_TexCoord = gl.getAttribLocation(gl.program, 'a_TexCoord');
+    if (a_TexCoord < 0) {
+      console.log('Failed to get the storage location of a_TexCoord');
+      return -1;
+    }
+    // Assign the buffer object to a_TexCoord variable
+    gl.vertexAttribPointer( a_TexCoord, 2, gl.FLOAT, false, 0, 0 );
+    gl.enableVertexAttribArray( a_TexCoord );  // Enable the assignment of the buffer object
 
     var ret = {};
         ret.body = body;
@@ -488,8 +531,61 @@ function initArrayBuffer(gl, data, num, type, attribute) {
 }
 
 
+function initTextures(gl) {
+
+    var texture = gl.createTexture();   // Create a texture object
+    if (!texture) {
+        console.log('Failed to create the texture object');
+        return false;
+    }
+
+    // Get the storage location of u_Sampler
+    var u_Sampler = gl.getUniformLocation(gl.program, 'u_Sampler');
+    if (!u_Sampler) {
+        console.log('Failed to get the storage location of u_Sampler');
+        return false;
+    }
+    var image = new Image();  // Create the image object
+    if (!image) {
+        console.log('Failed to create the image object');
+        return false;
+    }
+
+    image.crossOrigin = 'anonymous';
+
+    // Register the event handler to be called on loading an image
+    image.onload = function(){ loadTexture(gl, texture, u_Sampler, image); };
+    // Tell the browser to load an image
+    image.src = '../img/texture.jpeg';
+
+    return true;
+}
+
+
+function loadTexture(gl, texture, u_Sampler, image) {
+
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1); // Flip the image's y axis
+    // Enable texture unit0
+    gl.activeTexture(gl.TEXTURE0);
+    // Bind the texture object to the target
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    // Set the texture parameters
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    // Set the texture image
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+
+    // Set the texture unit 0 to the sampler
+    gl.uniform1i(u_Sampler, 0);
+
+    //gl.clear(gl.COLOR_BUFFER_BIT);   // Clear <canvas>
+
+    //gl.drawArrays(gl.TRIANGLE_STRIP, 0, n); // Draw the rectangle
+}
+
+
 function draw( gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, speed,
-    modelMatrix, viewMatrix, projectionMatrix, u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor ){
+    modelMatrix, viewMatrix, projectionMatrix, u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord ){
 
 
     // Clear <canvas>
@@ -581,7 +677,9 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, speed
     gl.uniform4f( u_FragColor, 0.0, 0.0, 0.0, 1 );
     modelMatrix.setTranslate( 0, 0, 0 );
     gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
+    gl.enableVertexAttribArray(a_TexCoord);
     gl.drawElements(gl.TRIANGLES, buffersInfo.floor.indices.length, gl.UNSIGNED_BYTE, 0);
+    gl.disableVertexAttribArray(a_TexCoord);
 
     // Right camera
     gl.viewport( width/2, 0, width/2, height );
@@ -603,7 +701,9 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, speed
     );
     gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
     gl.uniformMatrix4fv( u_vMatrix, false, viewMatrix.elements);
+    gl.enableVertexAttribArray(a_TexCoord);
     gl.drawElements(gl.TRIANGLES, buffersInfo.floor.indices.length, gl.UNSIGNED_BYTE, 0);
+    gl.disableVertexAttribArray(a_TexCoord);
 
     /*
     viewMatrix.setLookAt(

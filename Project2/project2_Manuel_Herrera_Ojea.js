@@ -42,8 +42,7 @@ var FSHADER_SOURCE =
     'float rate;\n' +
     'void main() {\n' +
     '  if ( u_FragColor.r == 0.0 )\n' +
-    '    gl_FragColor = texture2D(u_Sampler, v_TexCoord);\n' +
-//    '    gl_FragColor = v_Color;\n' +
+    '    gl_FragColor = mix( texture2D(u_Sampler, v_TexCoord), v_Color, 0.6 );\n' +
     '  else {\n' +
     '    rate = (v_Colored + 1.0) / 2.0;\n' +
     '    if ( rate > 1.0 )\n' +
@@ -545,18 +544,19 @@ function initTextures(gl) {
         console.log('Failed to get the storage location of u_Sampler');
         return false;
     }
-    var image = new Image();  // Create the image object
+
+    // Create the image object
+    var image = new Image();
     if (!image) {
         console.log('Failed to create the image object');
         return false;
     }
-
-    image.crossOrigin = 'anonymous';
+    image.crossOrigin = '';
 
     // Register the event handler to be called on loading an image
     image.onload = function(){ loadTexture(gl, texture, u_Sampler, image); };
     // Tell the browser to load an image
-    image.src = '../img/texture.jpeg';
+    image.src = 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRGFsLhbzD4W5BGZALlImNbhF-OvLJfoxG2qe_xMbs7rkNdIpvn';
 
     return true;
 }
@@ -690,7 +690,7 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, speed
         chopperPosition.y,
         -chopperPosition.z
     );
-    //modelMatrix.rotate( 180, 0, 1, 0 );
+    modelMatrix.scale( 0.3, 1, 0.3 );
     viewMatrix.setLookAt(
         // eye
         0.0,0.0,5.0,

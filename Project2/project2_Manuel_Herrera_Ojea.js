@@ -1,10 +1,3 @@
-/*
-
-textura
-vertical sinusoidal offset =D
-
-*/
-
 
 
 // Vertex shader program
@@ -16,17 +9,14 @@ var VSHADER_SOURCE =
     'uniform mat4 u_vMatrix;\n' +
     'uniform mat4 u_pMatrix;\n' +
     'varying vec4 v_Color;\n' +
-    'varying float v_Colored;\n' +
+    'varying float v_Height;\n' +
     'varying vec2 v_TexCoord;\n' +
     'void main() {\n' +
     '  gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * a_Position;\n' +
     '  v_TexCoord = a_TexCoord;\n' +
     '  v_Color = a_Color;\n' +
-    '  if ( a_Position.y > 0.7 )\n' +
-    '    v_Colored = 1.0;\n' +
-    '  else\n' +
-    '    v_Colored = -1.0;\n' +
-    '  v_Colored = a_Position.y;\n' +
+       // Letting the fragment shader know which vertices to color
+    '  v_Height = a_Position.y;\n' +
     '}\n';
 
 // Fragment shader program
@@ -37,23 +27,25 @@ var FSHADER_SOURCE =
     'uniform vec4 u_FragColor;\n' +
     'uniform sampler2D u_Sampler;\n' +
     'varying vec4 v_Color;\n' +
-    'varying float v_Colored;\n' +
+    'varying float v_Height;\n' +
     'varying vec2 v_TexCoord;\n' +
     'float rate;\n' +
     'void main() {\n' +
+       // Mix vertex color and texture for the floor
     '  if ( u_FragColor.r == 0.0 )\n' +
     '    gl_FragColor = mix( texture2D(u_Sampler, v_TexCoord), v_Color, 0.6 );\n' +
     '  else {\n' +
-    '    rate = (v_Colored + 1.0) / 2.0;\n' +
+         // Polynomial interpolation of white and another color
+         // for the actual chopper
+    '    rate = (v_Height + 1.0) / 2.0;\n' +
     '    if ( rate > 1.0 )\n' +
     '      rate = 1.0;\n' +
     '    else if ( rate < -1.0 )\n' +
     '      rate = -1.0;\n' +
     '    gl_FragColor = mix( v_Color, u_FragColor, pow(rate,1.7) );\n' +
     '  }\n' +
-//    '  else\n' +
-//    '   gl_FragColor = v_Color;\n' +
     '}\n';
+
 
 
 // Controller keys
@@ -64,14 +56,14 @@ var leftTurnKey = 'ArrowLeft';
 var uwdAccKey = 'KeyW';
 var dwdAccKey = 'KeyS';
 
-// Screen dimensions to render two different viewports
+// Screen dimensions, used to render two different viewports
 var width;
 var height;
 
-// Simulation of time for the position animation
+// Simulation of time for the position swinging animation
 var time = 0.0;
-var swingingSpeed = 0.05;
-var factor = 16;
+var swingingSpeed = 0.04;
+var factor = 8.0;   // effect reduction
 var offsetX, offsetY, offsetZ;
 
 
@@ -105,7 +97,8 @@ function main() {
     var buffersInfo = initVertexBuffers(gl);
 
     // Set texture
-    if (!initTextures(gl)) {
+    var source = 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRGFsLhbzD4W5BGZALlImNbhF-OvLJfoxG2qe_xMbs7rkNdIpvn';
+    if (!initTextures(gl,source)) {
         console.log('Failed to intialize the texture.');
         return;
     }
@@ -150,10 +143,16 @@ function main() {
     }
 
 
-    // Matrices passed to the vertex shader
+    // Matrices passed to the vertex shader.
+    // We let the shader multiply them, instead of having
+    // JavaScript do it, for performance purposes
+    // and readability of the rendering code
     var modelMatrix = new Matrix4();
     var viewMatrix = new Matrix4();
     var projectionMatrix = new Matrix4();
+
+
+    /// Variables needed for the movement system ///
 
 
     // Current chopper rotation angle
@@ -192,7 +191,7 @@ function main() {
     var bladeAcceleration = 2.0;
     var bladeFriction = 0.5;
 
-    // State control variables
+    // Key state control variables
     var accelerating = false;
     var decelerating = false;
     var ascending = false;
@@ -241,10 +240,6 @@ function main() {
         // Update properties based on movement model
 
         // Update horizontal linear speed
-        /*if ( accelerating && chopperHorizontalLinearSpeed < chopperMaxHorizontalLinearSpeed )
-            chopperHorizontalLinearSpeed += chopperHorizontalLinearAcceleration;
-        else if ( chopperHorizontalLinearSpeed > 0 )
-            chopperHorizontalLinearSpeed -= chopperHorizontalLinearFriction;*/
         if ( accelerating && chopperHorizontalLinearSpeed < chopperMaxHorizontalLinearSpeed )
             chopperHorizontalLinearSpeed += chopperHorizontalLinearAcceleration;
         else if ( decelerating && chopperHorizontalLinearSpeed > -chopperMaxHorizontalLinearSpeed )
@@ -289,10 +284,6 @@ function main() {
         // Update orientation
         chopperAngle += chopperAngularSpeed;
 
-        // Clip to zero to prevent shivering because of float precision errors
-        if ( ! accelerating && chopperHorizontalLinearSpeed < chopperHorizontalLinearAcceleration )
-            chopperLinearSpeed = 0.0;
-
         // Convert to radians for Math libraries
         var angle = chopperAngle * Math.PI / 180.0;
         // Update chopper position
@@ -309,11 +300,20 @@ function main() {
             bladeSpeed -= bladeFriction;
         bladeAngle += bladeSpeed;
 
-        // Position animation
+        // Position swinging animation
         offsetX = Math.cos( time ) / factor;
         offsetY = Math.cos( time * 0.7 ) / factor;
         offsetZ = Math.cos( time * 1.7 ) / factor;
         time += swingingSpeed;
+
+        // Scaling for the blades when the chopper is
+        // either accelerating or ascending
+        var bladesScale;
+        if ( chopperHorizontalLinearSpeed > 0 || chopperVerticalLinearSpeed > 0 )
+            bladesScale =
+                1 + Math.max(chopperHorizontalLinearSpeed + chopperVerticalLinearSpeed) * 1.5;
+        else
+            bladesScale = 1.0;
 
 
         // Print state
@@ -335,35 +335,26 @@ function main() {
                     '\t' + chopperPosition.y + '\n' +
                 'angle:\t ' + chopperAngle + '\n' +
                 '\n\n\n'
-
             );
 
-        var bladesScale;
-        if ( chopperHorizontalLinearSpeed > 0 )
-            bladesScale = 1 + chopperHorizontalLinearSpeed * 1.5;
-        else
-            bladesScale = 1.0;
 
         // Draw the chopper
         draw(
-            gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, bladesScale,
+            gl, buffersInfo,
+            chopperAngle, bladeAngle, chopperPosition, bladesScale,
             modelMatrix, viewMatrix, projectionMatrix,
             u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord
         );
 
 
-        //gl.drawElements(gl.TRIANGLES, n, gl.UNSIGNED_BYTE, 0);
-
-        // Request that the browser calls tick
+        // Request the browser to call tick
         requestAnimationFrame(tick, canvas);
     };
 
     tick();
-
-
-    // Draw the cube
-    //gl.drawElements(gl.TRIANGLES, n, gl.UNSIGNED_BYTE, 0);
 }
+
+
 
 function initVertexBuffers(gl) {
 
@@ -372,8 +363,8 @@ function initVertexBuffers(gl) {
     var blades = {};
     var floor = {};
 
-    /// Vertex coordinates ///
 
+    /// Vertex coordinates ///
 
     // Cube:
     //    v2----- v1
@@ -386,9 +377,15 @@ function initVertexBuffers(gl) {
 
     body.vertices = new Float32Array([
         // v0-v1-v2-v3 up
-        0.8, 0.8, 1.0,  1.0, 1.0,-1.0,  -1.0, 1.0,-1.0,     -0.8, 0.8, 1.0,
+        0.8, 0.8, 1.0,
+        1.0, 1.0,-1.0,
+        -1.0, 1.0,-1.0,
+        -0.8, 0.8, 1.0,
         // v4-v5-v6-v7 down
-        -1.0,-1.0,-1.0, 1.0,-1.0,-1.0,  0.8,-0.8, 1.0,      -0.8,-0.8, 1.0
+        -1.0,-1.0,-1.0,
+        1.0,-1.0,-1.0,
+        0.8,-0.8, 1.0,
+        -0.8,-0.8, 1.0
     ]);
 
     // Blades:
@@ -397,7 +394,10 @@ function initVertexBuffers(gl) {
     //  v2----------------v0
 
     blades.vertices = new Float32Array([
-        2.5,1.15,0.2,    2.5,1.15,-0.2,   -2.5,1.15,0.2,    -2.5,1.15,-0.2
+        2.5,1.15,0.2,
+        2.5,1.15,-0.2,
+        -2.5,1.15,0.2,
+        -2.5,1.15,-0.2
     ]);
 
     // Floor:
@@ -411,8 +411,10 @@ function initVertexBuffers(gl) {
 
     floor.vertices = new Float32Array([
         // corners
-        -10.0,-2.0,-10.0,   10.0,-2.0,-10.0,
-        -10.0,-2.0,10.0,    10.0,-2.0,10.0,
+        -10.0,-2.0,-10.0,
+        10.0,-2.0,-10.0,
+        -10.0,-2.0,10.0,
+        10.0,-2.0,10.0,
         //center
         0.0,-2.0,0.0
     ]);
@@ -420,12 +422,17 @@ function initVertexBuffers(gl) {
 
     /// Color coordinates ///
 
-
     body.colors = new Float32Array([
         // up (darker)
-        0.8, 0.8, 0.8,  0.8, 0.8, 0.8,  0.8, 0.8, 0.8,  0.8, 0.8, 0.8,
+        0.8, 0.8, 0.8,
+        0.8, 0.8, 0.8,
+        0.8, 0.8, 0.8,
+        0.8, 0.8, 0.8,
         // down (lighter)
-        1.0, 1.0, 1.0,  1.0, 1.0, 1.0,  1.0, 1.0, 1.0,  1.0, 1.0, 1.0
+        1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0
     ]);
 
     blades.colors = new Float32Array([
@@ -439,8 +446,7 @@ function initVertexBuffers(gl) {
     ]);
 
 
-    /// Indices table ///
-
+    /// Indices tables ///
 
     body.indices = new Uint8Array([
         0, 3, 7,   0, 7, 6,    // front
@@ -467,11 +473,6 @@ function initVertexBuffers(gl) {
         0.0, 0.0,
         1.0, 1.0,
         1.0, 0.0,
-        0.5, 0.5,
-        0.0, 1.0,
-        0.0, 0.0,
-        1.0, 1.0,
-        1.0, 0.0,
         0.5, 0.5
     ]);
 
@@ -494,7 +495,8 @@ function initVertexBuffers(gl) {
         It doesn't allow for hardware acceleration this way,
         since JavaScript is doing the job, but I found
         no other way so far to use drawElements, this is,
-        to use indices tables, to make several drawing calls.
+        to use indices tables, to make several drawing calls
+        for the different objects in the scene.
 
         But the texture coordinates buffer doesn't change
         throughout the execution.
@@ -513,16 +515,19 @@ function initVertexBuffers(gl) {
     gl.vertexAttribPointer( a_TexCoord, 2, gl.FLOAT, false, 0, 0 );
     gl.enableVertexAttribArray( a_TexCoord );  // Enable the assignment of the buffer object
 
-    var ret = {};
-        ret.body = body;
-        ret.blades = blades;
-        ret.floor = floor;
 
-    return ret;
+    var buffers = {};
+        buffers.body = body;
+        buffers.blades = blades;
+        buffers.floor = floor;
+
+    return buffers;
 }
 
 
+
 function initArrayBuffer(gl, data, num, type, attribute) {
+
 
     var buffer = gl.createBuffer();   // Create a buffer object
     if (!buffer) {
@@ -547,7 +552,9 @@ function initArrayBuffer(gl, data, num, type, attribute) {
 }
 
 
-function initTextures(gl) {
+
+function initTextures(gl, source) {
+
 
     var texture = gl.createTexture();   // Create a texture object
     if (!texture) {
@@ -573,13 +580,15 @@ function initTextures(gl) {
     // Register the event handler to be called on loading an image
     image.onload = function(){ loadTexture(gl, texture, u_Sampler, image); };
     // Tell the browser to load an image
-    image.src = 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRGFsLhbzD4W5BGZALlImNbhF-OvLJfoxG2qe_xMbs7rkNdIpvn';
+    image.src = source;
 
     return true;
 }
 
 
+
 function loadTexture(gl, texture, u_Sampler, image) {
+
 
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1); // Flip the image's y axis
     // Enable texture unit0
@@ -594,11 +603,8 @@ function loadTexture(gl, texture, u_Sampler, image) {
 
     // Set the texture unit 0 to the sampler
     gl.uniform1i(u_Sampler, 0);
-
-    //gl.clear(gl.COLOR_BUFFER_BIT);   // Clear <canvas>
-
-    //gl.drawArrays(gl.TRIANGLE_STRIP, 0, n); // Draw the rectangle
 }
+
 
 
 function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
@@ -609,15 +615,16 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
 
-    // Begin drawing for the left camera only
-    gl.viewport( 0, 0, width/2, height );
-
-    // Update position for the animation
+    // Update the position for the swinging animation
     var chopperPosition = {
         'x' : rawPosition.x + offsetX,
         'y' : rawPosition.y + offsetY,
         'z' : rawPosition.z + offsetZ
     }
+
+
+    // Begin drawing for the left camera only
+    gl.viewport( 0, 0, width/2, height );
 
 
     /// Body ///
@@ -631,8 +638,7 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
     viewMatrix.setLookAt(20,20,30, 0,0,0, 0,1,0);
     projectionMatrix.setPerspective(30,1,1,100);
 
-
-    // Pass the model view projection matrices to the shaders
+    // Pass the model, view and projection matrices to the vertex shader
     gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
     gl.uniformMatrix4fv( u_vMatrix, false, viewMatrix.elements);
     gl.uniformMatrix4fv( u_pMatrix, false, projectionMatrix.elements);
@@ -654,7 +660,6 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.body.indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.body.indices, gl.STATIC_DRAW);
 
-
     // Draw the chopper body
     gl.drawElements(gl.TRIANGLES, buffersInfo.body.indices.length, gl.UNSIGNED_BYTE, 0);
 
@@ -662,7 +667,8 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
     /// Blades ///
 
     // We only need to update the extra rotation of the blades,
-    // with respect to the body of the chopper
+    // with respect to the body of the chopper,
+    // and its scaling from speed
     modelMatrix.rotate( bladeAngle, 0, 1, 0 );
     modelMatrix.scale( speed, 1, (speed+1)/2, 1 );
     gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
@@ -708,7 +714,6 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
 
     // Right camera
     gl.viewport( width/2, 0, width/2, height );
-    console.log(chopperPosition);
     modelMatrix.setRotate( -chopperAngle, 0, 1, 0 );
     modelMatrix.translate(
         -chopperPosition.x,
@@ -730,20 +735,4 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
     gl.enableVertexAttribArray(a_TexCoord);
     gl.drawElements(gl.TRIANGLES, buffersInfo.floor.indices.length, gl.UNSIGNED_BYTE, 0);
     gl.disableVertexAttribArray(a_TexCoord);
-
-
-
-
-
-
-    // Repeat process, this time for the blades
-    modelMatrix.setTranslate( chopperPosition.x, chopperPosition.y, 0 );
-    modelMatrix.rotate( chopperAngle + bladeAngle, 0, 0, 1 );
-    modelMatrix.scale( speed, (speed+1)/2, 1, 1 );
-    //gl.uniformMatrix4fv(u_MvpMatrix, false, modelMatrix.elements);
-    //gl.uniform4f( u_FragColor, (r+1)/2, (g+1)/2, (b+1)/2, 1 );
-
-    // Draw the blades
-    //gl.drawElements(gl.TRIANGLES, indices.total, gl.UNSIGNED_BYTE, 0);
-    //gl.drawArrays( gl.TRIANGLES, 3, 6 );
 }

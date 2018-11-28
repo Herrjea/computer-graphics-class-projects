@@ -64,14 +64,19 @@ var leftTurnKey = 'ArrowLeft';
 var uwdAccKey = 'KeyW';
 var dwdAccKey = 'KeyS';
 
-
-// Print state during execution
-var debug = false;
-
-
 // Screen dimensions to render two different viewports
 var width;
 var height;
+
+// Simulation of time for the position animation
+var time = 0.0;
+var swingingSpeed = 0.05;
+var factor = 16;
+var offsetX, offsetY, offsetZ;
+
+
+// Print state during execution
+var debug = false;
 
 
 
@@ -181,11 +186,11 @@ function main() {
 
     // Blade rotation management
     var bladeAngle = 0.0;
-    var bladeSpeed = 5.0;
+    var bladeSpeed = 10.0;
     var bladeBaseSpeed = 5.0;
-    var bladeMaxSpeed = 40.0;
-    var bladeAcceleration = 5.0;
-    var bladeFriction = 1.0;
+    var bladeMaxSpeed = 20.0;
+    var bladeAcceleration = 2.0;
+    var bladeFriction = 0.5;
 
     // State control variables
     var accelerating = false;
@@ -296,13 +301,19 @@ function main() {
         chopperPosition.z += Math.cos( angle ) * chopperHorizontalLinearSpeed;
 
         // Update blades angle
-        if ( accelerating ){
+        if ( accelerating || ascending ){
             if ( bladeSpeed < bladeMaxSpeed )
-                bladeAngle += bladeAcceleration;
+                bladeSpeed += bladeAcceleration;
         }
         else if ( bladeSpeed > bladeBaseSpeed )
             bladeSpeed -= bladeFriction;
         bladeAngle += bladeSpeed;
+
+        // Position animation
+        offsetX = Math.cos( time ) / factor;
+        offsetY = Math.cos( time * 0.7 ) / factor;
+        offsetZ = Math.cos( time * 1.7 ) / factor;
+        time += swingingSpeed;
 
 
         // Print state
@@ -327,9 +338,15 @@ function main() {
 
             );
 
+        var bladesScale;
+        if ( chopperHorizontalLinearSpeed > 0 )
+            bladesScale = 1 + chopperHorizontalLinearSpeed * 1.5;
+        else
+            bladesScale = 1.0;
+
         // Draw the chopper
         draw(
-            gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, 1+chopperHorizontalLinearSpeed*15,
+            gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, bladesScale,
             modelMatrix, viewMatrix, projectionMatrix,
             u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord
         );
@@ -584,7 +601,7 @@ function loadTexture(gl, texture, u_Sampler, image) {
 }
 
 
-function draw( gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, speed,
+function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
     modelMatrix, viewMatrix, projectionMatrix, u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord ){
 
 
@@ -594,6 +611,13 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, speed
 
     // Begin drawing for the left camera only
     gl.viewport( 0, 0, width/2, height );
+
+    // Update position for the animation
+    var chopperPosition = {
+        'x' : rawPosition.x + offsetX,
+        'y' : rawPosition.y + offsetY,
+        'z' : rawPosition.z + offsetZ
+    }
 
 
     /// Body ///
@@ -640,6 +664,7 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, speed
     // We only need to update the extra rotation of the blades,
     // with respect to the body of the chopper
     modelMatrix.rotate( bladeAngle, 0, 1, 0 );
+    modelMatrix.scale( speed, 1, (speed+1)/2, 1 );
     gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
 
     gl.uniform4f( u_FragColor, r * 0.95, g * 0.95, b * 0.95, 1 );
@@ -683,60 +708,33 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, chopperPosition, speed
 
     // Right camera
     gl.viewport( width/2, 0, width/2, height );
-    modelMatrix.rotate( -90, 1, 0, 0 );
-    modelMatrix.rotate( -chopperAngle, 0, 1, 0 );
+    console.log(chopperPosition);
+    modelMatrix.setRotate( -chopperAngle, 0, 1, 0 );
     modelMatrix.translate(
         -chopperPosition.x,
-        chopperPosition.y,
+        -chopperPosition.y,
         -chopperPosition.z
     );
-    modelMatrix.scale( 0.3, 1, 0.3 );
     viewMatrix.setLookAt(
         // eye
-        0.0,0.0,5.0,
+        0.0, 0.0, 0.0,
         // at
-        0.0,-1.0,0.0,
+        0.0, 0.0 - 1.0, 0.0,
         // up
-        0,1,0
+        0.0, 0.0, 1.0
     );
+    projectionMatrix.setPerspective(70,1,1,100)
     gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
     gl.uniformMatrix4fv( u_vMatrix, false, viewMatrix.elements);
+    gl.uniformMatrix4fv( u_pMatrix, false, projectionMatrix.elements);
     gl.enableVertexAttribArray(a_TexCoord);
     gl.drawElements(gl.TRIANGLES, buffersInfo.floor.indices.length, gl.UNSIGNED_BYTE, 0);
     gl.disableVertexAttribArray(a_TexCoord);
 
-    /*
-    viewMatrix.setLookAt(
-        // eye
-        0.0,0.0,0.0,
-        // at
-        0.0,1.0,0.0,
-        // up
-        0,0,1
-    );
-    viewMatrix.rotate( chopperAngle, 0, 1, 0 );
-    viewMatrix.translate(-chopperPosition.x,chopperPosition.y,-chopperPosition.z);
-    */
-
-    /* viewMatrix.setLookAt(
-        // eye
-        chopperPosition.x,
-        chopperPosition.y,
-        chopperPosition.z,
-        // at
-        chopperPosition.x,
-        chopperPosition.y - 1,
-        chopperPosition.z,
-        // up
-        0,0,1
-    );
-    */
 
 
 
 
-    // Draw the triangle
-    //gl.drawArrays( gl.TRIANGLES, 0, 3 );
 
     // Repeat process, this time for the blades
     modelMatrix.setTranslate( chopperPosition.x, chopperPosition.y, 0 );

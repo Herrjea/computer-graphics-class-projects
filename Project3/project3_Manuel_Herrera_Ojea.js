@@ -1,0 +1,725 @@
+
+/*
+
+Falta:
+Comportamiento extraño con una resolución superior a 15 D=
+El tamaño del suelo se reduce a la mitad al aplicarle la altura
+
+Adicional:
+Movimiento de la cámara con el cursor
+Color en las faldas, blanco en las cumbres
+Hacerlo más panorámico =} 800*400
+
+The scaling and translating of the terrain has been made in the grid constructor, instead of in the vertex shader as was proposed, since it's not going to be changed in this project during the execution of the program and it only has to be computed once.
+
+*/
+
+// Vertex shader program
+var VSHADER_SOURCE =
+    'attribute vec4 a_Position;\n' +
+    'attribute vec4 a_Color;\n' +
+    'attribute vec2 a_TexCoord;\n' +
+    'uniform mat4 u_mMatrix;\n' +
+    'uniform mat4 u_vMatrix;\n' +
+    'uniform mat4 u_pMatrix;\n' +
+    'uniform sampler2D u_Sampler;\n' +
+    'varying vec4 v_Color;\n' +
+    'varying float v_Height;\n' +
+    'varying vec4 heightOffset;\n' +
+    //'varying vec2 v_TexCoord;\n' +
+    'void main() {\n' +
+    //'  v_TexCoord = a_TexCoord;\n' +
+    '  v_Color = a_Color;\n' +
+       // Letting the fragment shader know which vertices to color
+    '  v_Height = a_Position.y;\n' +
+    '  if ( v_Height == 0.0 ){\n' +
+    //'    heightOffset = mat4( 1.0, 0.0, 0.0, 0.0, /**/ 0.0, 1.0, 0.0, texture2D(u_Sampler, a_TexCoord).r * 2.0, /**/ 0.0, 0.0, 1.0, 0.0, /**/ 0.0, 0.0, 0.0, 1.0 );\n' +
+    '    heightOffset = vec4( 0.0,texture2D(u_Sampler, a_TexCoord).r * 10.0, 0.0, 1.0 );\n' +
+    '    gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * ( a_Position + heightOffset );\n' +
+    '  }else {\n' +
+    '    gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * a_Position;\n' +
+    '  }\n' +
+    '}\n';
+
+// Fragment shader program
+var FSHADER_SOURCE =
+    '#ifdef GL_ES\n' +
+    'precision mediump float;\n' +
+    '#endif\n' +
+    'uniform vec4 u_FragColor;\n' +
+    'uniform sampler2D u_Sampler;\n' +
+    'varying vec4 v_Color;\n' +
+    'varying float v_Height;\n' +
+    //'varying vec2 v_TexCoord;\n' +
+    'float rate;\n' +
+    'void main() {\n' +
+       // Mix vertex color and texture for the floor
+    '  if ( u_FragColor.r == 0.0 )\n' +
+    '    gl_FragColor = v_Color;\n' +
+    //'    gl_FragColor = mix( texture2D(u_Sampler, v_TexCoord), v_Color, 0.6 );\n' +
+    '  else {\n' +
+         // Polynomial interpolation of white and another color
+         // for the actual chopper
+    '    rate = (v_Height + 1.0) / 2.0;\n' +
+    '    if ( rate > 1.0 )\n' +
+    '      rate = 1.0;\n' +
+    '    else if ( rate < -1.0 )\n' +
+    '      rate = -1.0;\n' +
+    '    gl_FragColor = mix( v_Color, u_FragColor, pow(rate,1.7) );\n' +
+    '  }\n' +
+    '}\n';
+
+
+
+// Controller keys
+var fwdAccKey = 'ArrowUp';
+var bwdAccKey = 'ArrowDown';
+var rightTurnKey = 'ArrowRight';
+var leftTurnKey = 'ArrowLeft';
+var uwdAccKey = 'KeyW';
+var dwdAccKey = 'KeyS';
+
+// Simulation of time for the position swinging animation
+var time = 0.0;
+var swingingSpeed = 0.04;
+var factor = 8.0;   // effect reduction
+var offsetX, offsetY, offsetZ;
+
+
+// Print state during execution
+var debug = false;
+
+
+
+function main() {
+
+
+    // Retrieve <canvas> element
+    var canvas = document.getElementById('webgl');
+    width = canvas.width;
+    height = canvas.height;
+
+    // Get the rendering context for WebGL
+    var gl = getWebGLContext(canvas);
+    if (!gl) {
+        console.log('Failed to get the rendering context for WebGL');
+        return;
+    }
+
+    // Initialize shaders
+    if (!initShaders(gl, VSHADER_SOURCE, FSHADER_SOURCE)) {
+        console.log('Failed to intialize shaders.');
+        return;
+    }
+
+    // Set the vertex information
+    var buffersInfo = initVertexBuffers(gl);
+
+    // Set texture
+    var source = '../img/surface.jpg';
+    if ( !initTextures( gl, source ) ){
+        console.log( 'Failed to intialize the texture.' );
+        return;
+    }
+
+    // Set the clear color and enable the depth test
+    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    gl.enable(gl.DEPTH_TEST);
+
+    // Get the storage location of u_mMatrix
+    var u_mMatrix = gl.getUniformLocation(gl.program, 'u_mMatrix');
+    if (!u_mMatrix) {
+        console.log('Failed to get the storage location of u_mMatrix');
+        return;
+    }
+
+    // Get the storage location of u_vMatrix
+    var u_vMatrix = gl.getUniformLocation(gl.program, 'u_vMatrix');
+    if (!u_vMatrix) {
+        console.log('Failed to get the storage location of u_vMatrix');
+        return;
+    }
+
+    // Get the storage location of u_pMatrix
+    var u_pMatrix = gl.getUniformLocation(gl.program, 'u_pMatrix');
+    if (!u_pMatrix) {
+        console.log('Failed to get the storage location of u_pMatrix');
+        return;
+    }
+
+    // Get the storage location of u_FragColor
+    var u_FragColor = gl.getUniformLocation( gl.program, 'u_FragColor' );
+    if (!u_FragColor) {
+        console.log('Failed to get the storage location of u_FragColor');
+        return;
+    }
+
+    // Get the storage location of a_TexCoord
+    var a_TexCoord = gl.getAttribLocation(gl.program, 'a_TexCoord');
+    if (a_TexCoord < 0) {
+      console.log('Failed to get the storage location of a_TexCoord');
+      return -1;
+    }
+
+
+    // Matrices passed to the vertex shader.
+    // We let the shader multiply them, instead of having
+    // JavaScript do it, for performance purposes
+    // and readability of the rendering code
+    var modelMatrix = new Matrix4();
+    var viewMatrix = new Matrix4();
+    var projectionMatrix = new Matrix4();
+
+
+    /// Variables needed for the movement system ///
+
+
+    // Current chopper rotation angle
+    var chopperAngle = 0.0;
+
+    // Current chopper position
+    var chopperPosition = {
+        'x' : 0.0,
+        'y' : 5.0,
+        'z' : 0.0
+    };
+
+    // Chopper horizontal linear speed management
+    var chopperHorizontalLinearSpeed = 0;
+    var chopperHorizontalLinearAcceleration = 0.02;
+    var chopperHorizontalLinearFriction = 0.01;
+    var chopperMaxHorizontalLinearSpeed = 0.3;
+
+    // Chopper vertical linear speed management
+    var chopperVerticalLinearSpeed = 0;
+    var chopperVerticalLinearAcceleration = 0.015;
+    var chopperVerticalLinearFriction = 0.0035;
+    var chopperMaxVerticalLinearSpeed = 0.3;
+
+    // Chopper angular speed management
+    var chopperAngularSpeed = 0.0;
+    var chopperAngularAcceleration = 0.8;
+    var chopperAngularFriction = 0.6;
+    var chopperMaxAngularSpeed = 7.0;
+
+    // Blade rotation management
+    var bladeAngle = 0.0;
+    var bladeSpeed = 10.0;
+    var bladeBaseSpeed = 5.0;
+    var bladeMaxSpeed = 20.0;
+    var bladeAcceleration = 2.0;
+    var bladeFriction = 0.5;
+
+    // Key state control variables
+    var accelerating = false;
+    var decelerating = false;
+    var ascending = false;
+    var descending = false;
+    var turningRight = false;
+    var turningLeft = false;
+
+
+    // Change state depending on key presses
+    document.addEventListener( 'keydown', function(e){
+
+        console.log(e);
+        log( e.code, e.shiftKey );
+
+        if ( e.shiftKey ){
+
+            // Camera
+            if ( e.code == rightTurnKey )
+                turningLeft = true;
+            else if ( e.code == leftTurnKey )
+                turningRight = true;
+
+        }else{
+
+            // Position
+            if ( e.code == fwdAccKey )
+                accelerating = true;
+            else if ( e.code == bwdAccKey )
+                decelerating = true;
+            else if ( e.code == uwdAccKey )
+                ascending = true;
+            else if ( e.code == dwdAccKey )
+                descending = true;
+            else if ( e.code == rightTurnKey )
+                turningRight = true;
+            else if ( e.code == leftTurnKey )
+                turningLeft = true;
+        }
+    } );
+
+    // Change state depending on key releases
+    document.addEventListener( 'keyup', function(e){
+
+        if ( e.code == fwdAccKey )
+            accelerating = false;
+        else if ( e.code == bwdAccKey )
+            decelerating = false;
+        else if ( e.code == uwdAccKey )
+            ascending = false;
+        else if ( e.code == dwdAccKey )
+            descending = false;
+        else if ( e.code == rightTurnKey )
+            turningRight = false;
+        else if ( e.code == leftTurnKey )
+            turningLeft = false;
+    });
+
+
+    var tick = function() {
+
+        // Update properties based on movement model
+
+        // Update horizontal linear speed
+        if ( accelerating && chopperHorizontalLinearSpeed < chopperMaxHorizontalLinearSpeed )
+            chopperHorizontalLinearSpeed += chopperHorizontalLinearAcceleration;
+        else if ( decelerating && chopperHorizontalLinearSpeed > -chopperMaxHorizontalLinearSpeed )
+            chopperHorizontalLinearSpeed -= 0.1*chopperHorizontalLinearAcceleration;
+        else if ( !accelerating && !decelerating ){
+            if ( chopperHorizontalLinearSpeed > chopperHorizontalLinearFriction )
+                chopperHorizontalLinearSpeed -= chopperHorizontalLinearFriction;
+            else if ( chopperHorizontalLinearSpeed < -chopperHorizontalLinearFriction )
+                chopperHorizontalLinearSpeed += chopperHorizontalLinearFriction;
+            else
+                chopperHorizontalLinearSpeed = 0;
+        }
+
+        // Update vertical linear speed
+        if ( ascending && chopperVerticalLinearSpeed < chopperMaxVerticalLinearSpeed )
+            chopperVerticalLinearSpeed += chopperVerticalLinearAcceleration;
+        else if ( descending && chopperVerticalLinearSpeed > -chopperMaxVerticalLinearSpeed )
+            chopperVerticalLinearSpeed -= chopperVerticalLinearAcceleration;
+        else if ( !ascending && !descending ){
+            if ( chopperVerticalLinearSpeed > chopperVerticalLinearFriction )
+                chopperVerticalLinearSpeed -= chopperVerticalLinearFriction;
+            else if ( chopperVerticalLinearSpeed < -chopperVerticalLinearFriction )
+                chopperVerticalLinearSpeed += chopperVerticalLinearFriction;
+            else
+                chopperVerticalLinearSpeed = 0;
+        }
+
+        // Update angular speed
+        if ( turningRight ){
+            if ( chopperAngularSpeed > (-chopperMaxAngularSpeed) )
+                chopperAngularSpeed -= chopperAngularAcceleration;
+        }else if ( turningLeft ){
+            if ( chopperAngularSpeed < chopperMaxAngularSpeed )
+                chopperAngularSpeed += chopperAngularAcceleration;
+        }else if ( chopperAngularSpeed >= chopperAngularFriction )
+            chopperAngularSpeed -= chopperAngularFriction;
+        else if ( chopperAngularSpeed <= -chopperAngularFriction )
+            chopperAngularSpeed += chopperAngularFriction;
+        else
+            chopperAngularSpeed = 0.0;
+
+        // Update orientation
+        chopperAngle += chopperAngularSpeed;
+
+        // Convert to radians for Math libraries
+        var angle = chopperAngle * Math.PI / 180.0;
+        // Update chopper position
+        chopperPosition.x += Math.sin( angle ) * chopperHorizontalLinearSpeed;
+        chopperPosition.y += chopperVerticalLinearSpeed;
+        chopperPosition.z += Math.cos( angle ) * chopperHorizontalLinearSpeed;
+
+        // Update blades angle
+        if ( accelerating || ascending ){
+            if ( bladeSpeed < bladeMaxSpeed )
+                bladeSpeed += bladeAcceleration;
+        }
+        else if ( bladeSpeed > bladeBaseSpeed )
+            bladeSpeed -= bladeFriction;
+        bladeAngle += bladeSpeed;
+
+        // Position swinging animation
+        offsetX = Math.cos( time ) / factor;
+        offsetY = Math.cos( time * 0.7 ) / factor;
+        offsetZ = Math.cos( time * 1.7 ) / factor;
+        time += swingingSpeed;
+
+        // Scaling for the blades when the chopper is
+        // either accelerating or ascending
+        var bladesScale;
+        if ( chopperHorizontalLinearSpeed > 0 || chopperVerticalLinearSpeed > 0 )
+            bladesScale =
+                1 + Math.max(chopperHorizontalLinearSpeed + chopperVerticalLinearSpeed) * 1.5;
+        else
+            bladesScale = 1.0;
+
+
+        // Print state
+        if ( debug )
+            console.log(
+                // Movement
+                '\n\n\n' +
+                'accel:\t' + (accelerating|0) + '\n' +
+                'decel:\t' + (decelerating|0) + '\n' +
+                'ascen:\t' + (ascending|0) + '\n' +
+                'desce:\t' + (descending|0) + '\n' +
+                'Rturn:\t' + (turningRight|0) + '\n' +
+                'Lturn:\t' + (turningLeft|0) + '\n' +
+                '\n' +
+                // Position
+                'position:\n' +
+                    '\t' + chopperPosition.x + '\n' +
+                    '\t' + chopperPosition.y + '\n' +
+                    '\t' + chopperPosition.y + '\n' +
+                'angle:\t ' + chopperAngle + '\n' +
+                '\n\n\n'
+            );
+
+
+        // Draw the chopper
+        draw(
+            gl, buffersInfo,
+            chopperAngle, bladeAngle, chopperPosition, bladesScale,
+            modelMatrix, viewMatrix, projectionMatrix,
+            u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord
+        );
+
+
+        // Request the browser to call tick
+        requestAnimationFrame(tick, canvas);
+    };
+
+    tick();
+}
+
+
+
+function initVertexBuffers(gl) {
+
+
+    var body = {};
+    var blades = {};
+    var floor = {};
+    var floorData = new Grid(15);
+
+
+    /// Vertex coordinates ///
+
+    // Cube:
+    //    v2----- v1
+    //   /|      /|
+    //  v3------v0|
+    //  | |     | |
+    //  | |v4---|-|v5
+    //  |/      |/
+    //  v7------v6
+
+    body.vertices = new Float32Array([
+        // v0-v1-v2-v3 up
+        0.8, 0.8, 1.0,
+        1.0, 1.0,-1.0,
+        -1.0, 1.0,-1.0,
+        -0.8, 0.8, 1.0,
+        // v4-v5-v6-v7 down
+        -1.0,-1.0,-1.0,
+        1.0,-1.0,-1.0,
+        0.8,-0.8, 1.0,
+        -0.8,-0.8, 1.0
+    ]);
+
+    // Blades:
+    //    v3--------------- v1
+    //   /                  /
+    //  v2----------------v0
+
+    blades.vertices = new Float32Array([
+        2.5,1.15,0.2,
+        2.5,1.15,-0.2,
+        -2.5,1.15,0.2,
+        -2.5,1.15,-0.2
+    ]);
+
+    // The floor is a grid of NxN squares, each with two triangles,
+    // procedurally generated
+
+    floor.vertices = floorData.vertices;
+
+
+    /// Color coordinates ///
+
+    body.colors = new Float32Array([
+        // up (darker)
+        0.8, 0.8, 0.8,
+        0.8, 0.8, 0.8,
+        0.8, 0.8, 0.8,
+        0.8, 0.8, 0.8,
+        // down (lighter)
+        1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0
+    ]);
+
+    blades.colors = new Float32Array([
+        0.55, 0.55, 0.55,  0.55, 0.55, 0.55,
+        0.55, 0.55, 0.55,  0.55, 0.55, 0.55
+    ]);
+
+    floor.colors = floorData.colors;
+
+
+    /// Indices tables ///
+
+    body.indices = new Uint8Array([
+        0, 3, 7,   0, 7, 6,    // front
+        0, 6, 1,   1, 6, 5,    // right
+        2, 3, 0,   1, 2, 0,    // up
+        2, 7, 3,   2, 4, 7,    // left
+        4, 6, 7,   4, 5, 5,    // down
+        1, 4, 2,   1, 5, 4     // back
+    ]);
+
+    blades.indices = new Uint8Array([
+        0,1,3,   3,2,0
+    ]);
+
+    floor.indices = floorData.indices;
+
+
+    /// Texture coordinates for the floor ///
+
+    var floorTexCoords = floorData.texels;
+
+
+    /// Create the buffer objects ///
+
+    body.indexBuffer = gl.createBuffer();
+    blades.indexBuffer = gl.createBuffer();
+    floor.indexBuffer = gl.createBuffer();
+    var texCoordBuffer = gl.createBuffer();
+
+    if ( !body.indexBuffer || !blades.indexBuffer || !floor.indexBuffer || !texCoordBuffer ){
+        console.log('Failed to create a buffer object');
+        return -1;
+    }
+
+    /*
+        Different objects are stored in different buffers,
+        which are changed during render time.
+        It doesn't allow for hardware acceleration this way,
+        since JavaScript is doing the job, but I found
+        no other way so far to use drawElements, this is,
+        to use indices tables, to make several drawing calls
+        for the different objects in the scene.
+
+        But the texture coordinates buffer doesn't change
+        throughout the execution.
+    */
+
+    gl.bindBuffer( gl.ARRAY_BUFFER, texCoordBuffer );
+    gl.bufferData( gl.ARRAY_BUFFER, floorTexCoords, gl.STATIC_DRAW );
+
+    // Get the storage location of a_TexCoord
+    var a_TexCoord = gl.getAttribLocation(gl.program, 'a_TexCoord');
+    if (a_TexCoord < 0) {
+      console.log('Failed to get the storage location of a_TexCoord');
+      return -1;
+    }
+    // Assign the buffer object to a_TexCoord variable
+    gl.vertexAttribPointer( a_TexCoord, 2, gl.FLOAT, false, 0, 0 );
+    gl.enableVertexAttribArray( a_TexCoord );  // Enable the assignment of the buffer object
+
+
+    var buffers = {};
+        buffers.body = body;
+        buffers.blades = blades;
+        buffers.floor = floor;
+
+    return buffers;
+}
+
+
+
+function initArrayBuffer(gl, data, num, type, attribute) {
+
+
+    var buffer = gl.createBuffer();   // Create a buffer object
+    if (!buffer) {
+        console.log('Failed to create the buffer object');
+        return false;
+    }
+
+    // Write date into the buffer object
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    // Assign the buffer object to the attribute variable
+    var a_attribute = gl.getAttribLocation(gl.program, attribute);
+    if (a_attribute < 0) {
+        console.log('Failed to get the storage location of ' + attribute);
+        return false;
+    }
+    gl.vertexAttribPointer(a_attribute, num, type, false, 0, 0);
+    // Enable the assignment of the buffer object to the attribute variable
+    gl.enableVertexAttribArray(a_attribute);
+
+    return true;
+}
+
+
+
+function initTextures( gl, source ){
+
+
+    var texture = gl.createTexture();   // Create a texture object
+    if ( !texture ) {
+        console.log('Failed to create the texture object');
+        return false;
+    }
+
+    // Get the storage location of u_Sampler
+    var u_Sampler = gl.getUniformLocation(gl.program, 'u_Sampler');
+    if (!u_Sampler) {
+        console.log('Failed to get the storage location of u_Sampler');
+        return false;
+    }
+    var u_Sampler;
+
+    // Create the image object
+    var image = new Image();
+    if (!image) {
+        console.log('Failed to create the image object');
+        return false;
+    }
+    image.crossOrigin = '';
+
+    // Register the event handler to be called on loading an image
+    image.onload = function(){
+        loadTexture( gl, texture, u_Sampler, image );
+    };
+    // Tell the browser to load an image
+    image.src = source;
+
+    return true;
+}
+
+
+
+function loadTexture( gl, texture, u_Sampler, image ){
+
+
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1); // Flip the image's y axis
+    // Enable texture unit0
+    gl.activeTexture(gl.TEXTURE0);
+    // Bind the texture object to the target
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    // Set the texture parameters
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    // Set the texture image
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+
+    // Set the texture unit 0 to the sampler
+    gl.uniform1i(u_Sampler, 0);
+}
+
+
+
+function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
+    modelMatrix, viewMatrix, projectionMatrix, u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord ){
+
+
+    // Clear <canvas>
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+
+    // Update the position for the swinging animation
+    var chopperPosition = {
+        'x' : rawPosition.x + offsetX,
+        'y' : rawPosition.y + offsetY,
+        'z' : rawPosition.z + offsetZ
+    }
+
+
+    /// Body ///
+
+    modelMatrix.setTranslate(
+        chopperPosition.x,
+        chopperPosition.y,
+        chopperPosition.z
+    );
+    modelMatrix.rotate( chopperAngle, 0, 1, 0 );
+    viewMatrix.setLookAt(20,20,30, 0,0,0, 0,1,0);
+    //viewMatrix.rotate( 10, 0, 1, 0 );
+    //viewMatrix.rotate( 30, 1, 0, 0 );
+    projectionMatrix.setPerspective(30,1,1,100);
+
+    // Pass the model, view and projection matrices to the vertex shader
+    gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
+    gl.uniformMatrix4fv( u_vMatrix, false, viewMatrix.elements);
+    gl.uniformMatrix4fv( u_pMatrix, false, projectionMatrix.elements);
+
+    // Pass the color information to the fragment shader
+    var r = 0.3;
+    var g = ( chopperPosition.x + 10 ) / 20;
+    var b = ( chopperPosition.z + 10 ) / 20;
+    gl.uniform4f( u_FragColor, r, g, b, 1 );
+
+    // Write the vertex and color coordinates to the buffer object
+    if (!initArrayBuffer(gl, buffersInfo.body.vertices, 3, gl.FLOAT, 'a_Position'))
+        return -1;
+
+    if (!initArrayBuffer(gl, buffersInfo.body.colors, 3, gl.FLOAT, 'a_Color'))
+        return -1;
+
+    // Write the indices to the buffer object
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.body.indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.body.indices, gl.STATIC_DRAW);
+
+    // Draw the chopper body
+    gl.drawElements(gl.TRIANGLES, buffersInfo.body.indices.length, gl.UNSIGNED_BYTE, 0);
+
+
+    /// Blades ///
+
+    // We only need to update the extra rotation of the blades,
+    // with respect to the body of the chopper,
+    // and its scaling from speed
+    modelMatrix.rotate( bladeAngle, 0, 1, 0 );
+    modelMatrix.scale( speed, 1, (speed+1)/2, 1 );
+    gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
+
+    gl.uniform4f( u_FragColor, r * 0.95, g * 0.95, b * 0.95, 1 );
+
+    // Write the vertex and color coordinates to the buffer object
+    if (!initArrayBuffer(gl, buffersInfo.blades.vertices, 3, gl.FLOAT, 'a_Position'))
+        return -1;
+
+    if (!initArrayBuffer(gl, buffersInfo.blades.colors, 3, gl.FLOAT, 'a_Color'))
+        return -1;
+
+    // Write the indices to the buffer object
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.blades.indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.blades.indices, gl.STATIC_DRAW);
+
+
+    // Draw the chopper blades
+    //gl.drawElements(gl.TRIANGLES, buffersInfo.blades.indices.length, gl.UNSIGNED_BYTE, 0);
+
+
+    /// Floor ///
+
+    // Write the vertex and color coordinates to the buffer object
+    if (!initArrayBuffer(gl, buffersInfo.floor.vertices, 3, gl.FLOAT, 'a_Position'))
+        return -1;
+
+    if (!initArrayBuffer(gl, buffersInfo.floor.colors, 3, gl.FLOAT, 'a_Color'))
+        return -1;
+
+    // Write the indices to the buffer object
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.floor.indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.floor.indices, gl.STATIC_DRAW);
+
+    // Left camera
+    gl.uniform4f( u_FragColor, 0.0, 0.0, 0.0, 1 );
+    modelMatrix.setTranslate( 0, 0, 0 );
+    gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
+    gl.enableVertexAttribArray(a_TexCoord);
+    gl.drawElements(gl.TRIANGLES, buffersInfo.floor.indices.length, gl.UNSIGNED_BYTE, 0);
+    gl.disableVertexAttribArray(a_TexCoord);
+}

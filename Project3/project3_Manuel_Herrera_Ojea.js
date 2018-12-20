@@ -3,42 +3,197 @@
 
 Falta:
 Comportamiento extraño con una resolución superior a 15 D=
-El tamaño del suelo se reduce a la mitad al aplicarle la altura
+Normales en el helicóptero
+    Iluminarlo en condiciones
+Zoom con + o = y con - o _
 
 Adicional:
+Suavizar el movimiento de la cámara
 Movimiento de la cámara con el cursor
 Color en las faldas, blanco en las cumbres
 Hacerlo más panorámico =} 800*400
+Lighting per fragment
 
 The scaling and translating of the terrain has been made in the grid constructor, instead of in the vertex shader as was proposed, since it's not going to be changed in this project during the execution of the program and it only has to be computed once.
 
+He hecho:
+Chopper control (from Project #2).
+View control (rotate around vertical axis, rotate around one of the horizontal axes, zoom in, zoom out).
+Procedurally generated NxN grid of squares
+The grid's vertices have no position or normal information
+Index buffer for indexed rendering (working since Project #2)
+Fixed light in the scene.
+Phong reflection model (ambient, diffuse).
+Garaud interpolation model, leaving hard computations for the vertex shader, as described as WebGL development best practice.
+Lighting is computed for all the active lights in the scene
+Glowing bullets, as a point light source, being affected by gravity, and dying if the touch the horizontal origin plane.
+
+No haré:
+Eje Z vertical
+Specular component of the Phong interpolation model.
+
+He hecho distinto:
+Cálculo de la posición horizontal de los vértices del suelo
+Cálculo de la normal
+Air friction for the glowing bullets.
+
+Ha salido mal:
+The grid's resolution. When N > 15, the NxN grid object generates the texel values as expected but they aren't rendered as intended.
+Lighting in some vertices of the terrain. Even though normals seemed to be working well judging from the behaviour of the main light on them, the vertices near the center of the grid are lit stronger than those on outer positions, which sometimes reflect no perceivable light from the glowing bullets.
+
+He hecho de más:
+Color en el helicóptero (from Project #2)
+Movimiento del helicóptero (aceleración lineal, aceleración angular) (from Project #2)
+Aumento gradual de la velocidad de las hélices al avanzar o ascender el helicóptero (from Project #2)
+Chopper swinging animation (from Project #2)
+Color paramétrico en el suelo
+The orientation of the main light in the scene can be changed with the keys F, V, C and B.
+Glowing bullets take the color the chopper had at the moment they were shot.
+Virtually unlimited glowing bullets.
+
+
 */
+
+
+/*var pixels = new Uint8Array([
+    1,2,3,4,    2,3,4,5,    0,0,0,0,
+    5,6,7,8,    6,7,8,9,    1,1,1,1,
+    1,1,3,3,    2,2,4,4,    4,4,4,4,
+]);
+var width = 3, height = 3;
+var column, row, reversed, tmp;
+//console.log('holi');
+console.log(pixels);
+log(pixels);
+for ( let i = 0; i < width; i++ ){
+    column = i * 4;
+    for ( let j = 0; j < height / 2; j++ ){
+        row = j * width * 4;
+        reversed = ( height - 1 - j ) * width * 4;
+        log( 'i', i, 'j', j, 'column', column, 'row', row, 'reversed', reversed );
+        console.log( 'swap ' +(column+row) + ' with ' + (column+reversed) );
+        for ( let k = 0; k < 4; k++ ){
+            tmp = pixels[ column + row + k ];
+            pixels[ column + row  + k ] = pixels[ column + reversed + k ];
+            pixels[ column + reversed + k ] = tmp;
+        }
+    }
+}
+log(pixels);*/
+
+/*
+0 0     0
+0 1     8
+0 2     16
+1 0     4
+1 1     12
+1 2     20
+*/
+
+const maxPointLights = 100;
 
 // Vertex shader program
 var VSHADER_SOURCE =
     'attribute vec4 a_Position;\n' +
+    'attribute vec3 a_Normal;\n' +
     'attribute vec4 a_Color;\n' +
     'attribute vec2 a_TexCoord;\n' +
     'uniform mat4 u_mMatrix;\n' +
     'uniform mat4 u_vMatrix;\n' +
     'uniform mat4 u_pMatrix;\n' +
     'uniform sampler2D u_Sampler;\n' +
+    'uniform float u_Step;\n' +
+    'uniform float u_LightZ;\n' +
+    'uniform float u_LightX;\n' +
+    'uniform float u_PointLights;\n' +
     'varying vec4 v_Color;\n' +
     'varying float v_Height;\n' +
     'varying vec4 heightOffset;\n' +
+    'float upPos, downPos, leftPos, rightPos;\n' +
+    'float upHeight, downHeight, leftHeight, rightHeight;\n' +
+    'float nDotL, distanceRate;\n' +
+    'float heightScale = 5.0;\n' +
+    'vec4 vertexPosition;\n' +
+    'vec3 derivateS, derivateT, normal;\n' +
+    'vec3 lightColor = vec3( 0.8, 0.8, 0.8 );\n' +
+    'vec3 lightDirection = normalize( vec3( u_LightX, 10.0, u_LightZ ) );\n' +
+    'vec3 ambientLight = vec3( 0.5, 0.5, 0.5 );\n' +
+    'vec3 diffuse, ambient;\n' +
+    'uniform vec3 u_PointLightColor[' + maxPointLights + '];\n' +
+    'uniform vec3 u_PointLightPos[' + maxPointLights + '];\n' +
     //'varying vec2 v_TexCoord;\n' +
+
     'void main() {\n' +
-    //'  v_TexCoord = a_TexCoord;\n' +
-    '  v_Color = a_Color;\n' +
-       // Letting the fragment shader know which vertices to color
+
+    '  float b;\n' +
+    '  for ( float i = 0.0; i >= 0.0; i++ ){ if ( i == u_PointLights ) break; b = u_PointLightPos[int(i)].x; }\n' +
+
     '  v_Height = a_Position.y;\n' +
     '  if ( v_Height == 0.0 ){\n' +
     //'    heightOffset = mat4( 1.0, 0.0, 0.0, 0.0, /**/ 0.0, 1.0, 0.0, texture2D(u_Sampler, a_TexCoord).r * 2.0, /**/ 0.0, 0.0, 1.0, 0.0, /**/ 0.0, 0.0, 0.0, 1.0 );\n' +
-    '    heightOffset = vec4( 0.0,texture2D(u_Sampler, a_TexCoord).r * 10.0, 0.0, 1.0 );\n' +
-    '    gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * ( a_Position + heightOffset );\n' +
+    '    heightOffset = vec4( 0.0,texture2D(u_Sampler, a_TexCoord).r * heightScale, 0.0, 0.0 );\n' +
+    '    vertexPosition = a_Position + heightOffset;\n' +
+    '    gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * vertexPosition;\n' +
     '  }else {\n' +
     '    gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * a_Position;\n' +
     '  }\n' +
+
+    //'  v_TexCoord = a_TexCoord;\n' +
+
+       // Get the location of the four closest vertices, in taxicab distance.
+       // We don't need to explicitly handle over- or underflowed positions
+       // if we tell WebGL to clamp the texture wrapping
+    '  upPos = a_TexCoord.t + u_Step;\n' +
+    '  downPos = a_TexCoord.t - u_Step;\n' +
+    '  leftPos = a_TexCoord.s - u_Step;\n' +
+    '  rightPos = a_TexCoord.s + u_Step;\n' +
+
+       // Find the height of the three closest vertices
+    '  upHeight = texture2D( u_Sampler, vec2( a_TexCoord.s, upPos ) ).r * heightScale;\n' +
+    '  downHeight = texture2D( u_Sampler, vec2( a_TexCoord.s, downPos ) ).r * heightScale;\n' +
+    '  leftHeight = texture2D( u_Sampler, vec2( leftPos, a_TexCoord.t ) ).r * heightScale;\n' +
+    '  rightHeight = texture2D( u_Sampler, vec2( rightPos, a_TexCoord.t ) ).r * heightScale;\n' +
+
+       // Aproximate the partial derivates using position and inclination
+       // of the four closest vertices
+    '  derivateS = vec3( 2.0 * u_Step, rightHeight - leftHeight, 0.0 );\n' +
+    '  derivateT = vec3( 0.0, downHeight - upHeight, -2.0 * u_Step );\n' +
+       // Compute the normal as the cross product of the partial derivates
+    '  normal = normalize( cross( derivateS, derivateT ) );\n' +
+       // Dot product of light direction and surface orientation
+    '  nDotL = max( dot( lightDirection, a_Normal ), 0.0 );\n' +
+    '  nDotL = max( dot( lightDirection, normal ), 0.0 );\n' +
+
+       // Calculate render color based on vertex color, normal and lighting
+    '  diffuse = lightColor * a_Color.rgb * nDotL;\n' +
+    '  ambient = ambientLight * a_Color.rgb;\n' +
+
+
+       // Add lighting for every bullet in the scene
+    //'  for ( float i = 0.0; i >= 0.0; i++ ){\n' +
+    //'    if ( i == u_PointLights )\n' +
+    //'      break;\n' +
+         // Retrieve its color and position
+         // from the unused values of the texture
+    //'    pointLightColor = texture2D( u_Sampler, vec2(0,0) ).gba / 255.0;\n' + // vec2( 1.0 - ( 1.0 / 1024.0 * i * 2.0 + 1.0 / 1024.0 ), 0 ) en lugar de vec2
+    //'    pointLightPos = texture2D( u_Sampler, vec2( 1.0 / 1024.0 * i * 2.0 + 1.0, 0 ) ).gba / 20.0;\n' +
+
+    '  for ( float i = 0.0; i >= 0.0; i++ ){\n' +
+    '    if ( i == u_PointLights ){\n' +
+    '      break;\n' +
+    '    b = u_PointLightPos[int(i)].x; }\n' +
+         // Calculate the color to be added
+    '    nDotL = max( normalize( dot(u_PointLightPos[int(i)], normal ) ), 0.0 );\n' +
+    '    distanceRate = 1.0 - min( distance( vertexPosition, vec4( u_PointLightPos[int(i)], 1.0 ) ), 8.0 ) / 8.0;\n' +// vec4(pointLightPos,1.0) en lugar de vec4
+    //'    distanceRate = 1.0;\n' +
+    '    diffuse += u_PointLightColor[int(i)] * a_Color.rgb * nDotL * distanceRate;\n' +//pointLightColor en lugar de vec3
+    '  }\n' +
+
+       // Calculate the final color of the vertex
+    '  v_Color = vec4( diffuse + ambient, a_Color.a );\n' +
+       // Letting the fragment shader know which vertices to color
+    //'  v_Color = a_Color;\n' +
+
     '}\n';
 
 // Fragment shader program
@@ -76,8 +231,8 @@ var fwdAccKey = 'ArrowUp';
 var bwdAccKey = 'ArrowDown';
 var rightTurnKey = 'ArrowRight';
 var leftTurnKey = 'ArrowLeft';
-var uwdAccKey = 'KeyW';
-var dwdAccKey = 'KeyS';
+var uwdAccKey = 'KeyA';
+var dwdAccKey = 'KeyZ';
 
 // Simulation of time for the position swinging animation
 var time = 0.0;
@@ -90,6 +245,14 @@ var offsetX, offsetY, offsetZ;
 var debug = false;
 
 
+// Container object storing the fired bullets
+var bullets = new Bullets();
+
+var bullet;
+
+var texture;
+
+
 
 function main() {
 
@@ -100,6 +263,7 @@ function main() {
     height = canvas.height;
 
     // Get the rendering context for WebGL
+    var gl = canvas.getContext( 'webgl2' );
     var gl = getWebGLContext(canvas);
     if (!gl) {
         console.log('Failed to get the rendering context for WebGL');
@@ -161,6 +325,34 @@ function main() {
       return -1;
     }
 
+    var u_LightZ = gl.getUniformLocation(gl.program, 'u_LightZ');
+    if (!u_LightZ) {
+        console.log('Failed to get the storage location of u_LightZ');
+        return false;
+    }
+    var u_LightX = gl.getUniformLocation(gl.program, 'u_LightX');
+    if (!u_LightX) {
+        console.log('Failed to get the storage location of u_LightX');
+        return false;
+    }
+    var u_PointLights = gl.getUniformLocation(gl.program, 'u_PointLights');
+    if (!u_PointLights) {
+        console.log('Failed to get the storage location of u_PointLights');
+        return false;
+    }
+    gl.uniform1f( u_PointLights, 0 );
+    var u_PointLightColor = gl.getUniformLocation(gl.program, 'u_PointLightColor');
+    if (!u_PointLightColor) {
+        console.log('Failed to get the storage location of u_PointLightColor');
+        return false;
+    }
+    var u_PointLightPos = gl.getUniformLocation(gl.program, 'u_PointLightPos');
+    if (!u_PointLightPos) {
+        console.log('Failed to get the storage location of u_PointLightPos');
+        return false;
+    }
+    gl.uniform3fv( u_PointLightPos, bullets.positionInfoArray() );
+
 
     // Matrices passed to the vertex shader.
     // We let the shader multiply them, instead of having
@@ -169,6 +361,19 @@ function main() {
     var modelMatrix = new Matrix4();
     var viewMatrix = new Matrix4();
     var projectionMatrix = new Matrix4();
+
+
+    /*console.log( 'gl antes de crear la bala:' );
+    console.log(gl);
+    bullet = new Bullet( 0, 5, 0, 0, gl );
+    console.log( 'gl después:' );
+    console.log(gl);
+    bullets = new Bullets();
+    bullets.add( bullet );
+    bullet = new Bullet( 5, 5, 0, -60, gl );
+    bullets.add( bullet );
+    console.log('bullets:');
+    console.log(bullets.bullets);*/
 
 
     /// Variables needed for the movement system ///
@@ -219,19 +424,45 @@ function main() {
     var turningLeft = false;
 
 
+    /// Variables needed for the camera movement management
+
+    // Current camera rotation position
+    var cameraPosition = {
+        'x' : 0.0,
+        'y' : 0.0
+    };
+
+    var cameraSpeed = 5.0;
+
+
+    ///////////////////
+    var lightX = -7.0;
+    var lightZ = -2.0;
+    var spacePressed = false;
+    var probando = false;
+
+
     // Change state depending on key presses
     document.addEventListener( 'keydown', function(e){
 
-        console.log(e);
-        log( e.code, e.shiftKey );
+        //console.log(e);
+        //log( e.code, e.shiftKey );
+        //console.log( gl );
 
         if ( e.shiftKey ){
 
             // Camera
-            if ( e.code == rightTurnKey )
-                turningLeft = true;
+            if ( e.code == fwdAccKey )
+                cameraPosition.x -= cameraSpeed;
+            else if ( e.code == bwdAccKey )
+                cameraPosition.x += cameraSpeed;
+            else if ( e.code == rightTurnKey )
+                cameraPosition.y += cameraSpeed;
             else if ( e.code == leftTurnKey )
-                turningRight = true;
+                cameraPosition.y -= cameraSpeed;
+
+            if ( e.code == 'Space' )
+                probando = true;
 
         }else{
 
@@ -248,6 +479,17 @@ function main() {
                 turningRight = true;
             else if ( e.code == leftTurnKey )
                 turningLeft = true;
+            else if ( e.code == 'KeyV' )
+                lightZ--;
+            else if ( e.code == 'KeyF' )
+                lightZ++;
+            else if ( e.code == 'KeyC' )
+                lightX--;
+            else if ( e.code == 'KeyB' )
+                lightX++;
+
+            if ( e.code == 'Space' )
+                spacePressed = true;
         }
     } );
 
@@ -270,6 +512,14 @@ function main() {
 
 
     var tick = function() {
+
+
+        ////////
+        if ( probando ){
+            modifyTexture( gl, texture, [200,200,0, 0,200,0] );
+            probando = false;
+
+        }
 
         // Update properties based on movement model
 
@@ -349,6 +599,12 @@ function main() {
         else
             bladesScale = 1.0;
 
+        // Add a new bullet if the used pressed the spacebar
+        if ( spacePressed ){
+            bullets.add( new Bullet( chopperPosition, chopperAngle, gl ) );
+            spacePressed = false;
+        }
+
 
         // Print state
         if ( debug )
@@ -374,10 +630,10 @@ function main() {
 
         // Draw the chopper
         draw(
-            gl, buffersInfo,
+            gl, buffersInfo, cameraPosition,
             chopperAngle, bladeAngle, chopperPosition, bladesScale,
             modelMatrix, viewMatrix, projectionMatrix,
-            u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord
+            u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord, u_LightZ, lightZ, u_LightX, lightX, u_PointLights, u_PointLightColor, u_PointLightPos
         );
 
 
@@ -390,238 +646,8 @@ function main() {
 
 
 
-function initVertexBuffers(gl) {
-
-
-    var body = {};
-    var blades = {};
-    var floor = {};
-    var floorData = new Grid(15);
-
-
-    /// Vertex coordinates ///
-
-    // Cube:
-    //    v2----- v1
-    //   /|      /|
-    //  v3------v0|
-    //  | |     | |
-    //  | |v4---|-|v5
-    //  |/      |/
-    //  v7------v6
-
-    body.vertices = new Float32Array([
-        // v0-v1-v2-v3 up
-        0.8, 0.8, 1.0,
-        1.0, 1.0,-1.0,
-        -1.0, 1.0,-1.0,
-        -0.8, 0.8, 1.0,
-        // v4-v5-v6-v7 down
-        -1.0,-1.0,-1.0,
-        1.0,-1.0,-1.0,
-        0.8,-0.8, 1.0,
-        -0.8,-0.8, 1.0
-    ]);
-
-    // Blades:
-    //    v3--------------- v1
-    //   /                  /
-    //  v2----------------v0
-
-    blades.vertices = new Float32Array([
-        2.5,1.15,0.2,
-        2.5,1.15,-0.2,
-        -2.5,1.15,0.2,
-        -2.5,1.15,-0.2
-    ]);
-
-    // The floor is a grid of NxN squares, each with two triangles,
-    // procedurally generated
-
-    floor.vertices = floorData.vertices;
-
-
-    /// Color coordinates ///
-
-    body.colors = new Float32Array([
-        // up (darker)
-        0.8, 0.8, 0.8,
-        0.8, 0.8, 0.8,
-        0.8, 0.8, 0.8,
-        0.8, 0.8, 0.8,
-        // down (lighter)
-        1.0, 1.0, 1.0,
-        1.0, 1.0, 1.0,
-        1.0, 1.0, 1.0,
-        1.0, 1.0, 1.0
-    ]);
-
-    blades.colors = new Float32Array([
-        0.55, 0.55, 0.55,  0.55, 0.55, 0.55,
-        0.55, 0.55, 0.55,  0.55, 0.55, 0.55
-    ]);
-
-    floor.colors = floorData.colors;
-
-
-    /// Indices tables ///
-
-    body.indices = new Uint8Array([
-        0, 3, 7,   0, 7, 6,    // front
-        0, 6, 1,   1, 6, 5,    // right
-        2, 3, 0,   1, 2, 0,    // up
-        2, 7, 3,   2, 4, 7,    // left
-        4, 6, 7,   4, 5, 5,    // down
-        1, 4, 2,   1, 5, 4     // back
-    ]);
-
-    blades.indices = new Uint8Array([
-        0,1,3,   3,2,0
-    ]);
-
-    floor.indices = floorData.indices;
-
-
-    /// Texture coordinates for the floor ///
-
-    var floorTexCoords = floorData.texels;
-
-
-    /// Create the buffer objects ///
-
-    body.indexBuffer = gl.createBuffer();
-    blades.indexBuffer = gl.createBuffer();
-    floor.indexBuffer = gl.createBuffer();
-    var texCoordBuffer = gl.createBuffer();
-
-    if ( !body.indexBuffer || !blades.indexBuffer || !floor.indexBuffer || !texCoordBuffer ){
-        console.log('Failed to create a buffer object');
-        return -1;
-    }
-
-    /*
-        Different objects are stored in different buffers,
-        which are changed during render time.
-        It doesn't allow for hardware acceleration this way,
-        since JavaScript is doing the job, but I found
-        no other way so far to use drawElements, this is,
-        to use indices tables, to make several drawing calls
-        for the different objects in the scene.
-
-        But the texture coordinates buffer doesn't change
-        throughout the execution.
-    */
-
-    gl.bindBuffer( gl.ARRAY_BUFFER, texCoordBuffer );
-    gl.bufferData( gl.ARRAY_BUFFER, floorTexCoords, gl.STATIC_DRAW );
-
-    // Get the storage location of a_TexCoord
-    var a_TexCoord = gl.getAttribLocation(gl.program, 'a_TexCoord');
-    if (a_TexCoord < 0) {
-      console.log('Failed to get the storage location of a_TexCoord');
-      return -1;
-    }
-    // Assign the buffer object to a_TexCoord variable
-    gl.vertexAttribPointer( a_TexCoord, 2, gl.FLOAT, false, 0, 0 );
-    gl.enableVertexAttribArray( a_TexCoord );  // Enable the assignment of the buffer object
-
-
-    var buffers = {};
-        buffers.body = body;
-        buffers.blades = blades;
-        buffers.floor = floor;
-
-    return buffers;
-}
-
-
-
-function initArrayBuffer(gl, data, num, type, attribute) {
-
-
-    var buffer = gl.createBuffer();   // Create a buffer object
-    if (!buffer) {
-        console.log('Failed to create the buffer object');
-        return false;
-    }
-
-    // Write date into the buffer object
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    // Assign the buffer object to the attribute variable
-    var a_attribute = gl.getAttribLocation(gl.program, attribute);
-    if (a_attribute < 0) {
-        console.log('Failed to get the storage location of ' + attribute);
-        return false;
-    }
-    gl.vertexAttribPointer(a_attribute, num, type, false, 0, 0);
-    // Enable the assignment of the buffer object to the attribute variable
-    gl.enableVertexAttribArray(a_attribute);
-
-    return true;
-}
-
-
-
-function initTextures( gl, source ){
-
-
-    var texture = gl.createTexture();   // Create a texture object
-    if ( !texture ) {
-        console.log('Failed to create the texture object');
-        return false;
-    }
-
-    // Get the storage location of u_Sampler
-    var u_Sampler = gl.getUniformLocation(gl.program, 'u_Sampler');
-    if (!u_Sampler) {
-        console.log('Failed to get the storage location of u_Sampler');
-        return false;
-    }
-    var u_Sampler;
-
-    // Create the image object
-    var image = new Image();
-    if (!image) {
-        console.log('Failed to create the image object');
-        return false;
-    }
-    image.crossOrigin = '';
-
-    // Register the event handler to be called on loading an image
-    image.onload = function(){
-        loadTexture( gl, texture, u_Sampler, image );
-    };
-    // Tell the browser to load an image
-    image.src = source;
-
-    return true;
-}
-
-
-
-function loadTexture( gl, texture, u_Sampler, image ){
-
-
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1); // Flip the image's y axis
-    // Enable texture unit0
-    gl.activeTexture(gl.TEXTURE0);
-    // Bind the texture object to the target
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-
-    // Set the texture parameters
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    // Set the texture image
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
-
-    // Set the texture unit 0 to the sampler
-    gl.uniform1i(u_Sampler, 0);
-}
-
-
-
-function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
-    modelMatrix, viewMatrix, projectionMatrix, u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord ){
+function draw( gl, buffersInfo, cameraPosition, chopperAngle, bladeAngle,
+ rawPosition, speed, modelMatrix, viewMatrix, projectionMatrix, u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord, u_LightZ, lightZ, u_LightX, lightX, u_PointLights, u_PointLightColor, u_PointLightPos ){
 
 
     // Clear <canvas>
@@ -635,6 +661,22 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
         'z' : rawPosition.z + offsetZ
     }
 
+    /////////
+    gl.uniform1f( u_LightZ, lightZ );
+    gl.uniform1f( u_LightX, lightX );
+    //gl.uniform1f( u_PointLights, 1 );
+
+
+    if ( bullets.bullets.length > 0 ){
+        gl.uniform1f( u_PointLights, bullets.bullets.length );
+        //gl.uniform3f( u_PointLightPos, bullets.bullets[0].x, bullets.bullets[0].y, bullets.bullets[0].z );
+        //gl.uniform3f( u_PointLightColor, bullets.bullets[0].mesh.r, bullets.bullets[0].mesh.g, bullets.bullets[0].mesh.b );
+        gl.uniform3fv( u_PointLightPos, bullets.positionInfoArray() );
+        gl.uniform3fv( u_PointLightColor, bullets.colorInfoArray() );
+    }
+    else
+        gl.uniform1f( u_PointLights, 0 );
+
 
     /// Body ///
 
@@ -645,8 +687,8 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
     );
     modelMatrix.rotate( chopperAngle, 0, 1, 0 );
     viewMatrix.setLookAt(20,20,30, 0,0,0, 0,1,0);
-    //viewMatrix.rotate( 10, 0, 1, 0 );
-    //viewMatrix.rotate( 30, 1, 0, 0 );
+    viewMatrix.rotate( cameraPosition.x, 1, 0, 0 );
+    viewMatrix.rotate( cameraPosition.y, 0, 1, 0 );
     projectionMatrix.setPerspective(30,1,1,100);
 
     // Pass the model, view and projection matrices to the vertex shader
@@ -722,4 +764,11 @@ function draw( gl, buffersInfo, chopperAngle, bladeAngle, rawPosition, speed,
     gl.enableVertexAttribArray(a_TexCoord);
     gl.drawElements(gl.TRIANGLES, buffersInfo.floor.indices.length, gl.UNSIGNED_BYTE, 0);
     gl.disableVertexAttribArray(a_TexCoord);
+
+
+
+    bullets.update();
+    //console.log('tras update:');
+    //console.log(bullets.bullets);
+    bullets.draw( gl, u_mMatrix, modelMatrix );
 }

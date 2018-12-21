@@ -1,203 +1,190 @@
 
 /*
 
-Falta:
-Comportamiento extraño con una resolución superior a 15 D=
-Normales en el helicóptero
-    Iluminarlo en condiciones
-Zoom con + o = y con - o _
-
-Adicional:
-Suavizar el movimiento de la cámara
-Movimiento de la cámara con el cursor
-Color en las faldas, blanco en las cumbres
-Hacerlo más panorámico =} 800*400
-Lighting per fragment
-
-The scaling and translating of the terrain has been made in the grid constructor, instead of in the vertex shader as was proposed, since it's not going to be changed in this project during the execution of the program and it only has to be computed once.
-
-He hecho:
+Done:
+Rotating blades (from Project #1).
 Chopper control (from Project #2).
 View control (rotate around vertical axis, rotate around one of the horizontal axes, zoom in, zoom out).
-Procedurally generated NxN grid of squares
-The grid's vertices have no position or normal information
-Index buffer for indexed rendering (working since Project #2)
+Procedurally generated grid of NxN squares.
+The grid's vertices have no position or normal information.
+Index buffer for indexed rendering (from Project #2).
+Texture binding for the terrain to compute the height and normal of each floor vertex.
 Fixed light in the scene.
 Phong reflection model (ambient, diffuse).
 Garaud interpolation model, leaving hard computations for the vertex shader, as described as WebGL development best practice.
 Lighting is computed for all the active lights in the scene
-Glowing bullets, as a point light source, being affected by gravity, and dying if the touch the horizontal origin plane.
+Glowing bullets, as a point light source, being affected by gravity, and dying if they touch the horizontal origin plane.
 
-No haré:
-Eje Z vertical
+Not done:
+Z axis as the vertical axis (Y is, instead).
 Specular component of the Phong interpolation model.
 
-He hecho distinto:
-Cálculo de la posición horizontal de los vértices del suelo
-Cálculo de la normal
-Air friction for the glowing bullets.
+Done differently:
+Terrain horizontal coordinates calculation. The scaling and translating of the terrain has been made in the grid constructor, instead of in the vertex shader as was proposed, since it's not going to be changed in this project during the execution of the program and it only has to be computed once, and the steps to do both were essentially the same.
+Terrain's normal vectors calculation.
+Air friction is taken into account for the glowing bullets.
 
-Ha salido mal:
-The grid's resolution. When N > 15, the NxN grid object generates the texel values as expected but they aren't rendered as intended.
+Done wrong:
+The grid's resolution. When N > 15, the NxN grid object generates the texel values as expected, but they aren't rendered as intended.
 Lighting in some vertices of the terrain. Even though normals seemed to be working well judging from the behaviour of the main light on them, the vertices near the center of the grid are lit stronger than those on outer positions, which sometimes reflect no perceivable light from the glowing bullets.
 
-He hecho de más:
-Color en el helicóptero (from Project #2)
-Movimiento del helicóptero (aceleración lineal, aceleración angular) (from Project #2)
-Aumento gradual de la velocidad de las hélices al avanzar o ascender el helicóptero (from Project #2)
-Chopper swinging animation (from Project #2)
-Color paramétrico en el suelo
-The orientation of the main light in the scene can be changed with the keys F, V, C and B.
+Done additionally:
+Chopper color based of horizontal position (from Project #2).
+Chopper movement model (linear acceleration and momentum, angular acceleration and momentum) (from Project #2).
+Gradual increase of the blades' speed when the chopper moves forward or upwards (from Project #2).
+Chopper swinging animation (from Project #2).
+Parametric color for the ground.
+The orientation of the main light in the scene can be changed with the keys C and B, towards negative and positive X respectively.
 Glowing bullets take the color the chopper had at the moment they were shot.
-Virtually unlimited glowing bullets.
-
+Virtually unlimited glowing bullets. It's been set to 100, but there will never be nearly 100 bullets in the scene, given the rate at which they can be shot and the time it takes them to die.
+Texture editing to randomly alter the terrain, modifying the R components of the pixels of the stored texture.
 
 */
 
-
-/*var pixels = new Uint8Array([
-    1,2,3,4,    2,3,4,5,    0,0,0,0,
-    5,6,7,8,    6,7,8,9,    1,1,1,1,
-    1,1,3,3,    2,2,4,4,    4,4,4,4,
-]);
-var width = 3, height = 3;
-var column, row, reversed, tmp;
-//console.log('holi');
-console.log(pixels);
-log(pixels);
-for ( let i = 0; i < width; i++ ){
-    column = i * 4;
-    for ( let j = 0; j < height / 2; j++ ){
-        row = j * width * 4;
-        reversed = ( height - 1 - j ) * width * 4;
-        log( 'i', i, 'j', j, 'column', column, 'row', row, 'reversed', reversed );
-        console.log( 'swap ' +(column+row) + ' with ' + (column+reversed) );
-        for ( let k = 0; k < 4; k++ ){
-            tmp = pixels[ column + row + k ];
-            pixels[ column + row  + k ] = pixels[ column + reversed + k ];
-            pixels[ column + reversed + k ] = tmp;
-        }
-    }
-}
-log(pixels);*/
-
-/*
-0 0     0
-0 1     8
-0 2     16
-1 0     4
-1 1     12
-1 2     20
-*/
 
 const maxPointLights = 100;
 
+
 // Vertex shader program
 var VSHADER_SOURCE =
+
     'attribute vec4 a_Position;\n' +
     'attribute vec3 a_Normal;\n' +
     'attribute vec4 a_Color;\n' +
     'attribute vec2 a_TexCoord;\n' +
+
     'uniform mat4 u_mMatrix;\n' +
     'uniform mat4 u_vMatrix;\n' +
     'uniform mat4 u_pMatrix;\n' +
     'uniform sampler2D u_Sampler;\n' +
     'uniform float u_Step;\n' +
-    'uniform float u_LightZ;\n' +
     'uniform float u_LightX;\n' +
     'uniform float u_PointLights;\n' +
+
     'varying vec4 v_Color;\n' +
     'varying float v_Height;\n' +
     'varying vec4 heightOffset;\n' +
+    'varying vec2 v_TexCoord;\n' +
+
     'float upPos, downPos, leftPos, rightPos;\n' +
     'float upHeight, downHeight, leftHeight, rightHeight;\n' +
     'float nDotL, distanceRate;\n' +
-    'float heightScale = 5.0;\n' +
-    'vec4 vertexPosition;\n' +
+    'float heightScale = 7.0;\n' +
+    'float rate;\n' +
+    'vec4 vertexPosition, worldPosition;\n' +
     'vec3 derivateS, derivateT, normal;\n' +
+    'vec3 baseColor;\n' +
+
+    // Fixed light's color
     'vec3 lightColor = vec3( 0.8, 0.8, 0.8 );\n' +
-    'vec3 lightDirection = normalize( vec3( u_LightX, 10.0, u_LightZ ) );\n' +
+    // Fixed light's direction
+    'vec3 lightDirection = normalize( vec3( u_LightX, 10.0, -2.0 ) );\n' +
+    // Ambient light's color
     'vec3 ambientLight = vec3( 0.5, 0.5, 0.5 );\n' +
+
     'vec3 diffuse, ambient;\n' +
+
+    // Point lights' colors and positions
     'uniform vec3 u_PointLightColor[' + maxPointLights + '];\n' +
     'uniform vec3 u_PointLightPos[' + maxPointLights + '];\n' +
-    //'varying vec2 v_TexCoord;\n' +
+
 
     'void main() {\n' +
 
-    '  float b;\n' +
-    '  for ( float i = 0.0; i >= 0.0; i++ ){ if ( i == u_PointLights ) break; b = u_PointLightPos[int(i)].x; }\n' +
-
+       // Check whether a vertex belongs to the floor
     '  v_Height = a_Position.y;\n' +
+
+       // Calculate position of the floor vertices
     '  if ( v_Height == 0.0 ){\n' +
-    //'    heightOffset = mat4( 1.0, 0.0, 0.0, 0.0, /**/ 0.0, 1.0, 0.0, texture2D(u_Sampler, a_TexCoord).r * 2.0, /**/ 0.0, 0.0, 1.0, 0.0, /**/ 0.0, 0.0, 0.0, 1.0 );\n' +
     '    heightOffset = vec4( 0.0,texture2D(u_Sampler, a_TexCoord).r * heightScale, 0.0, 0.0 );\n' +
     '    vertexPosition = a_Position + heightOffset;\n' +
     '    gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * vertexPosition;\n' +
+    '    worldPosition = vertexPosition;\n' +
+
+       // Calculate position of the chopper and bullets vertices
     '  }else {\n' +
     '    gl_Position = u_pMatrix * u_vMatrix * u_mMatrix * a_Position;\n' +
+    '    worldPosition = u_pMatrix * a_Position;\n' +
     '  }\n' +
 
-    //'  v_TexCoord = a_TexCoord;\n' +
+
+       // Calculate normals for the floor vertices
+    '  if ( v_Height == 0.0 ){\n' +
 
        // Get the location of the four closest vertices, in taxicab distance.
        // We don't need to explicitly handle over- or underflowed positions
        // if we tell WebGL to clamp the texture wrapping
-    '  upPos = a_TexCoord.t + u_Step;\n' +
-    '  downPos = a_TexCoord.t - u_Step;\n' +
-    '  leftPos = a_TexCoord.s - u_Step;\n' +
-    '  rightPos = a_TexCoord.s + u_Step;\n' +
+    '    upPos = a_TexCoord.t + u_Step;\n' +
+    '    downPos = a_TexCoord.t - u_Step;\n' +
+    '    leftPos = a_TexCoord.s - u_Step;\n' +
+    '    rightPos = a_TexCoord.s + u_Step;\n' +
 
-       // Find the height of the three closest vertices
-    '  upHeight = texture2D( u_Sampler, vec2( a_TexCoord.s, upPos ) ).r * heightScale;\n' +
-    '  downHeight = texture2D( u_Sampler, vec2( a_TexCoord.s, downPos ) ).r * heightScale;\n' +
-    '  leftHeight = texture2D( u_Sampler, vec2( leftPos, a_TexCoord.t ) ).r * heightScale;\n' +
-    '  rightHeight = texture2D( u_Sampler, vec2( rightPos, a_TexCoord.t ) ).r * heightScale;\n' +
+         // Find the height of those three closest vertices
+    '    upHeight = texture2D( u_Sampler, vec2( a_TexCoord.s, upPos ) ).r * heightScale;\n' +
+    '    downHeight = texture2D( u_Sampler, vec2( a_TexCoord.s, downPos ) ).r * heightScale;\n' +
+    '    leftHeight = texture2D( u_Sampler, vec2( leftPos, a_TexCoord.t ) ).r * heightScale;\n' +
+    '    rightHeight = texture2D( u_Sampler, vec2( rightPos, a_TexCoord.t ) ).r * heightScale;\n' +
 
-       // Aproximate the partial derivates using position and inclination
-       // of the four closest vertices
-    '  derivateS = vec3( 2.0 * u_Step, rightHeight - leftHeight, 0.0 );\n' +
-    '  derivateT = vec3( 0.0, downHeight - upHeight, -2.0 * u_Step );\n' +
-       // Compute the normal as the cross product of the partial derivates
-    '  normal = normalize( cross( derivateS, derivateT ) );\n' +
+         // Aproximate the partial derivates using position and inclination
+         // of the four closest vertices
+    '    derivateS = vec3( 2.0 * u_Step, rightHeight - leftHeight, 0.0 );\n' +
+    '    derivateT = vec3( 0.0, downHeight - upHeight, -2.0 * u_Step );\n' +
+
+         // Compute the normal as the cross product of the partial derivates
+    '    normal = normalize( cross( derivateS, derivateT ) );\n' +
+
+
+       // Read the attribute normal information
+       // for vertices other than those of the floor
+    '  } else {\n' +
+    '     normal = normalize( ( u_mMatrix * vec4( a_Normal, 0.0 ) ).xyz ) * 3.0;\n' +
+    '  }\n' +
+
+       // Calculate base color
+       // (needed for the snowy peaks)
+    '  if ( v_Height == 0.0 ){\n' +
+    '    baseColor = a_Color.rgb;\n' +
+    '  }else {\n' +
+    '    rate = texture2D(u_Sampler, v_TexCoord).r;\n' +
+    '    baseColor = mix( vec4( 1.0, 1.0, 1.0, 1.0 ), a_Color, heightOffset / heightScale ).rgb;\n' +
+    '  }\n' +
+    //'  baseColor = a_Color.rgb;\n' +
+
+
        // Dot product of light direction and surface orientation
-    '  nDotL = max( dot( lightDirection, a_Normal ), 0.0 );\n' +
     '  nDotL = max( dot( lightDirection, normal ), 0.0 );\n' +
 
        // Calculate render color based on vertex color, normal and lighting
-    '  diffuse = lightColor * a_Color.rgb * nDotL;\n' +
-    '  ambient = ambientLight * a_Color.rgb;\n' +
+    '  diffuse = lightColor * baseColor * nDotL;\n' +
+    '  ambient = ambientLight * baseColor;\n' +
 
 
        // Add lighting for every bullet in the scene
-    //'  for ( float i = 0.0; i >= 0.0; i++ ){\n' +
-    //'    if ( i == u_PointLights )\n' +
-    //'      break;\n' +
-         // Retrieve its color and position
-         // from the unused values of the texture
-    //'    pointLightColor = texture2D( u_Sampler, vec2(0,0) ).gba / 255.0;\n' + // vec2( 1.0 - ( 1.0 / 1024.0 * i * 2.0 + 1.0 / 1024.0 ), 0 ) en lugar de vec2
-    //'    pointLightPos = texture2D( u_Sampler, vec2( 1.0 / 1024.0 * i * 2.0 + 1.0, 0 ) ).gba / 20.0;\n' +
 
     '  for ( float i = 0.0; i >= 0.0; i++ ){\n' +
     '    if ( i == u_PointLights ){\n' +
     '      break;\n' +
-    '    b = u_PointLightPos[int(i)].x; }\n' +
-         // Calculate the color to be added
+    '    }\n' +
+
     '    nDotL = max( normalize( dot(u_PointLightPos[int(i)], normal ) ), 0.0 );\n' +
-    '    distanceRate = 1.0 - min( distance( vertexPosition, vec4( u_PointLightPos[int(i)], 1.0 ) ), 8.0 ) / 8.0;\n' +// vec4(pointLightPos,1.0) en lugar de vec4
-    //'    distanceRate = 1.0;\n' +
-    '    diffuse += u_PointLightColor[int(i)] * a_Color.rgb * nDotL * distanceRate;\n' +//pointLightColor en lugar de vec3
+    '    distanceRate = 1.0 - min( distance( worldPosition, vec4( u_PointLightPos[int(i)], 1.0 ) ), 8.0 ) / 8.0;\n' +
+    '    diffuse += u_PointLightColor[int(i)] * baseColor * nDotL * distanceRate;\n' +
     '  }\n' +
+
 
        // Calculate the final color of the vertex
     '  v_Color = vec4( diffuse + ambient, a_Color.a );\n' +
-       // Letting the fragment shader know which vertices to color
-    //'  v_Color = a_Color;\n' +
+
+
+       // Let the fragment shader know which pixel was used
+    '  v_TexCoord = a_TexCoord;\n' +
 
     '}\n';
 
+
 // Fragment shader program
 var FSHADER_SOURCE =
+
     '#ifdef GL_ES\n' +
     'precision mediump float;\n' +
     '#endif\n' +
@@ -205,14 +192,20 @@ var FSHADER_SOURCE =
     'uniform sampler2D u_Sampler;\n' +
     'varying vec4 v_Color;\n' +
     'varying float v_Height;\n' +
-    //'varying vec2 v_TexCoord;\n' +
+    'varying vec2 v_TexCoord;\n' +
     'float rate;\n' +
+
+
     'void main() {\n' +
-       // Mix vertex color and texture for the floor
-    '  if ( u_FragColor.r == 0.0 )\n' +
-    '    gl_FragColor = v_Color;\n' +
-    //'    gl_FragColor = mix( texture2D(u_Sampler, v_TexCoord), v_Color, 0.6 );\n' +
-    '  else {\n' +
+
+
+        // The floor vertices take a color based on their horizontal position,
+        // and are interpolated with white based on their height
+     '  if ( u_FragColor.r == 0.0 ){\n' +
+     '    gl_FragColor = v_Color;\n' +
+
+    '  } else {\n' +
+
          // Polynomial interpolation of white and another color
          // for the actual chopper
     '    rate = (v_Height + 1.0) / 2.0;\n' +
@@ -233,6 +226,14 @@ var rightTurnKey = 'ArrowRight';
 var leftTurnKey = 'ArrowLeft';
 var uwdAccKey = 'KeyA';
 var dwdAccKey = 'KeyZ';
+var shootKey = 'Space';
+var lightRightKey = 'KeyB';
+var lightLeftKey = 'KeyC';
+var zoomInKeyA = 'BracketRight';
+var zoomInKeyB = '';
+var zoomOutKeyA = 'Slash';
+var zoomOutKeyB = '';
+
 
 // Simulation of time for the position swinging animation
 var time = 0.0;
@@ -248,8 +249,8 @@ var debug = false;
 // Container object storing the fired bullets
 var bullets = new Bullets();
 
-var bullet;
 
+// Texture variable shared between different functions
 var texture;
 
 
@@ -259,11 +260,9 @@ function main() {
 
     // Retrieve <canvas> element
     var canvas = document.getElementById('webgl');
-    width = canvas.width;
-    height = canvas.height;
 
     // Get the rendering context for WebGL
-    var gl = canvas.getContext( 'webgl2' );
+    var gl = canvas.getContext( 'webgl' );
     var gl = getWebGLContext(canvas);
     if (!gl) {
         console.log('Failed to get the rendering context for WebGL');
@@ -325,27 +324,32 @@ function main() {
       return -1;
     }
 
-    var u_LightZ = gl.getUniformLocation(gl.program, 'u_LightZ');
-    if (!u_LightZ) {
-        console.log('Failed to get the storage location of u_LightZ');
-        return false;
+    // Get the storage location of a_Normal
+    var a_Normal = gl.getAttribLocation(gl.program, 'a_Normal');
+    if (a_Normal < 0) {
+      console.log('Failed to get the storage location of a_Normal');
+      return -1;
     }
+
     var u_LightX = gl.getUniformLocation(gl.program, 'u_LightX');
     if (!u_LightX) {
         console.log('Failed to get the storage location of u_LightX');
         return false;
     }
+
     var u_PointLights = gl.getUniformLocation(gl.program, 'u_PointLights');
     if (!u_PointLights) {
         console.log('Failed to get the storage location of u_PointLights');
         return false;
     }
     gl.uniform1f( u_PointLights, 0 );
+
     var u_PointLightColor = gl.getUniformLocation(gl.program, 'u_PointLightColor');
     if (!u_PointLightColor) {
         console.log('Failed to get the storage location of u_PointLightColor');
         return false;
     }
+
     var u_PointLightPos = gl.getUniformLocation(gl.program, 'u_PointLightPos');
     if (!u_PointLightPos) {
         console.log('Failed to get the storage location of u_PointLightPos');
@@ -363,19 +367,6 @@ function main() {
     var projectionMatrix = new Matrix4();
 
 
-    /*console.log( 'gl antes de crear la bala:' );
-    console.log(gl);
-    bullet = new Bullet( 0, 5, 0, 0, gl );
-    console.log( 'gl después:' );
-    console.log(gl);
-    bullets = new Bullets();
-    bullets.add( bullet );
-    bullet = new Bullet( 5, 5, 0, -60, gl );
-    bullets.add( bullet );
-    console.log('bullets:');
-    console.log(bullets.bullets);*/
-
-
     /// Variables needed for the movement system ///
 
 
@@ -385,7 +376,7 @@ function main() {
     // Current chopper position
     var chopperPosition = {
         'x' : 0.0,
-        'y' : 5.0,
+        'y' : 7.0,
         'z' : 0.0
     };
 
@@ -434,20 +425,21 @@ function main() {
 
     var cameraSpeed = 5.0;
 
+    var cameraZoom = 1.0;
 
-    ///////////////////
+
+    // "Fixed" light's X coordinate position
     var lightX = -7.0;
-    var lightZ = -2.0;
-    var spacePressed = false;
-    var probando = false;
+
+    // Control bullets shooting requests
+    var bulletRequest = false;
+
+    // Control requests to alter the terrain through the texture
+    var alterFloorRequest = false;
 
 
     // Change state depending on key presses
     document.addEventListener( 'keydown', function(e){
-
-        //console.log(e);
-        //log( e.code, e.shiftKey );
-        //console.log( gl );
 
         if ( e.shiftKey ){
 
@@ -461,8 +453,8 @@ function main() {
             else if ( e.code == leftTurnKey )
                 cameraPosition.y -= cameraSpeed;
 
-            if ( e.code == 'Space' )
-                probando = true;
+            if ( e.code == shootKey )
+                alterFloorRequest = true;
 
         }else{
 
@@ -479,19 +471,20 @@ function main() {
                 turningRight = true;
             else if ( e.code == leftTurnKey )
                 turningLeft = true;
-            else if ( e.code == 'KeyV' )
-                lightZ--;
-            else if ( e.code == 'KeyF' )
-                lightZ++;
-            else if ( e.code == 'KeyC' )
+            else if ( e.code == lightLeftKey )
                 lightX--;
-            else if ( e.code == 'KeyB' )
+            else if ( e.code == lightRightKey )
                 lightX++;
+            else if ( e.code == zoomInKeyA )
+                cameraZoom /= 1.1;
+            else if ( e.code == zoomOutKeyA )
+                cameraZoom *= 1.1;
 
-            if ( e.code == 'Space' )
-                spacePressed = true;
+            if ( e.code == shootKey )
+                bulletRequest = true;
         }
     } );
+
 
     // Change state depending on key releases
     document.addEventListener( 'keyup', function(e){
@@ -514,12 +507,13 @@ function main() {
     var tick = function() {
 
 
-        ////////
-        if ( probando ){
-            modifyTexture( gl, texture, [200,200,0, 0,200,0] );
-            probando = false;
+        // Alter the terrain through the texture
+        if ( alterFloorRequest ){
+            modifyTexture( gl, texture );
+            alterFloorRequest = false;
 
         }
+
 
         // Update properties based on movement model
 
@@ -599,10 +593,11 @@ function main() {
         else
             bladesScale = 1.0;
 
+
         // Add a new bullet if the used pressed the spacebar
-        if ( spacePressed ){
+        if ( bulletRequest ){
             bullets.add( new Bullet( chopperPosition, chopperAngle, gl ) );
-            spacePressed = false;
+            bulletRequest = false;
         }
 
 
@@ -633,7 +628,7 @@ function main() {
             gl, buffersInfo, cameraPosition,
             chopperAngle, bladeAngle, chopperPosition, bladesScale,
             modelMatrix, viewMatrix, projectionMatrix,
-            u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord, u_LightZ, lightZ, u_LightX, lightX, u_PointLights, u_PointLightColor, u_PointLightPos
+            u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord, a_Normal, u_LightX, lightX, u_PointLights, u_PointLightColor, u_PointLightPos, cameraZoom
         );
 
 
@@ -647,7 +642,7 @@ function main() {
 
 
 function draw( gl, buffersInfo, cameraPosition, chopperAngle, bladeAngle,
- rawPosition, speed, modelMatrix, viewMatrix, projectionMatrix, u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord, u_LightZ, lightZ, u_LightX, lightX, u_PointLights, u_PointLightColor, u_PointLightPos ){
+ rawPosition, speed, modelMatrix, viewMatrix, projectionMatrix, u_mMatrix, u_vMatrix, u_pMatrix, u_FragColor, a_TexCoord, a_Normal, u_LightX, lightX, u_PointLights, u_PointLightColor, u_PointLightPos, cameraZoom ){
 
 
     // Clear <canvas>
@@ -661,21 +656,16 @@ function draw( gl, buffersInfo, cameraPosition, chopperAngle, bladeAngle,
         'z' : rawPosition.z + offsetZ
     }
 
-    /////////
-    gl.uniform1f( u_LightZ, lightZ );
+    // Pass the X coordinate of the "fixed" light
     gl.uniform1f( u_LightX, lightX );
-    //gl.uniform1f( u_PointLights, 1 );
 
 
+    // Pass the location and color of the active bullets
+    gl.uniform1f( u_PointLights, bullets.bullets.length );
     if ( bullets.bullets.length > 0 ){
-        gl.uniform1f( u_PointLights, bullets.bullets.length );
-        //gl.uniform3f( u_PointLightPos, bullets.bullets[0].x, bullets.bullets[0].y, bullets.bullets[0].z );
-        //gl.uniform3f( u_PointLightColor, bullets.bullets[0].mesh.r, bullets.bullets[0].mesh.g, bullets.bullets[0].mesh.b );
         gl.uniform3fv( u_PointLightPos, bullets.positionInfoArray() );
         gl.uniform3fv( u_PointLightColor, bullets.colorInfoArray() );
     }
-    else
-        gl.uniform1f( u_PointLights, 0 );
 
 
     /// Body ///
@@ -689,9 +679,10 @@ function draw( gl, buffersInfo, cameraPosition, chopperAngle, bladeAngle,
     viewMatrix.setLookAt(20,20,30, 0,0,0, 0,1,0);
     viewMatrix.rotate( cameraPosition.x, 1, 0, 0 );
     viewMatrix.rotate( cameraPosition.y, 0, 1, 0 );
-    projectionMatrix.setPerspective(30,1,1,100);
+    projectionMatrix.setPerspective(30*cameraZoom,1,1,100);
 
-    // Pass the model, view and projection matrices to the vertex shader
+    // Pass the model, view, projection and rotation matrices
+    // to the vertex shader
     gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
     gl.uniformMatrix4fv( u_vMatrix, false, viewMatrix.elements);
     gl.uniformMatrix4fv( u_pMatrix, false, projectionMatrix.elements);
@@ -704,6 +695,9 @@ function draw( gl, buffersInfo, cameraPosition, chopperAngle, bladeAngle,
 
     // Write the vertex and color coordinates to the buffer object
     if (!initArrayBuffer(gl, buffersInfo.body.vertices, 3, gl.FLOAT, 'a_Position'))
+        return -1;
+
+    if (!initArrayBuffer(gl, buffersInfo.body.normals, 3, gl.FLOAT, 'a_Normal'))
         return -1;
 
     if (!initArrayBuffer(gl, buffersInfo.body.colors, 3, gl.FLOAT, 'a_Color'))
@@ -732,6 +726,9 @@ function draw( gl, buffersInfo, cameraPosition, chopperAngle, bladeAngle,
     if (!initArrayBuffer(gl, buffersInfo.blades.vertices, 3, gl.FLOAT, 'a_Position'))
         return -1;
 
+    if (!initArrayBuffer(gl, buffersInfo.blades.normals, 3, gl.FLOAT, 'a_Normal'))
+        return -1;
+
     if (!initArrayBuffer(gl, buffersInfo.blades.colors, 3, gl.FLOAT, 'a_Color'))
         return -1;
 
@@ -741,7 +738,7 @@ function draw( gl, buffersInfo, cameraPosition, chopperAngle, bladeAngle,
 
 
     // Draw the chopper blades
-    //gl.drawElements(gl.TRIANGLES, buffersInfo.blades.indices.length, gl.UNSIGNED_BYTE, 0);
+    gl.drawElements(gl.TRIANGLES, buffersInfo.blades.indices.length, gl.UNSIGNED_BYTE, 0);
 
 
     /// Floor ///
@@ -757,18 +754,17 @@ function draw( gl, buffersInfo, cameraPosition, chopperAngle, bladeAngle,
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.floor.indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, buffersInfo.floor.indices, gl.STATIC_DRAW);
 
-    // Left camera
     gl.uniform4f( u_FragColor, 0.0, 0.0, 0.0, 1 );
     modelMatrix.setTranslate( 0, 0, 0 );
     gl.uniformMatrix4fv( u_mMatrix, false, modelMatrix.elements);
     gl.enableVertexAttribArray(a_TexCoord);
+    gl.disableVertexAttribArray( a_Normal );
     gl.drawElements(gl.TRIANGLES, buffersInfo.floor.indices.length, gl.UNSIGNED_BYTE, 0);
     gl.disableVertexAttribArray(a_TexCoord);
 
 
+    /// Bullets ///
 
     bullets.update();
-    //console.log('tras update:');
-    //console.log(bullets.bullets);
     bullets.draw( gl, u_mMatrix, modelMatrix );
 }
